@@ -84,7 +84,24 @@
     });
   }
 
-  var SL = { setNames: setNames, metresWord: metresWord, speechText: speechText, groundChips: groundChips, nameRu: nameRu, compassHeading: compassHeading, horizontalFov: horizontalFov, packFrame: packFrame,
+  /* The radar must stay readable: same name in the same 30-degree sector and the same liveness is ONE marker ("x3"). */
+  function groupForRadar(entries, severity) {
+    var groups = {}, order = [];
+    (entries || []).forEach(function (v) {
+      var live = v.status !== 'remembered', key = v.name + '|' + Math.round(v.rel_az_deg / 30) + '|' + (live ? 'L' : 'R'), g = groups[key];
+      if (!g) { g = groups[key] = { name: v.name, count: 0, sum: 0, range_m: null, live: live, status: v.status, danger: !!(severity && severity[v.name] === 'danger') }; order.push(key); }
+      g.count++; g.sum += v.rel_az_deg; if (v.range_m !== null && v.range_m !== undefined && (g.range_m === null || v.range_m < g.range_m)) g.range_m = v.range_m;
+      if (live && v.status === 'confirmed') g.status = 'confirmed';
+    });
+    return order.map(function (k) { var g = groups[k]; g.rel_az_deg = g.sum / g.count; return g; })
+      .sort(function (a, b) { return (b.live - a.live) || ((a.range_m === null ? 99 : a.range_m) - (b.range_m === null ? 99 : b.range_m)); }).slice(0, 24);
+  }
+
+  /* No fresh result for too long: the page must say so aloud, a silent failure is dangerous for a person who cannot see. */
+  var STALE_MS = 4000;
+  function isStale(lastAt, now, limitMs) { return lastAt > 0 && (now - lastAt) > (limitMs || STALE_MS); }
+
+  var SL = { isStale: isStale, groupForRadar: groupForRadar, setNames: setNames, metresWord: metresWord, speechText: speechText, groundChips: groundChips, nameRu: nameRu, compassHeading: compassHeading, horizontalFov: horizontalFov, packFrame: packFrame,
              pickCameraDevice: pickCameraDevice, clockText: clockText, rangeText: rangeText, STATUS_RU: STATUS_RU };
   if (typeof module !== 'undefined' && module.exports) { module.exports = SL; return; }
   if (typeof document === 'undefined') return;
@@ -92,7 +109,7 @@
   /* ------------------------------------------------------------------------------------------------ page */
   var $ = function (id) { return document.getElementById(id); };
   var S = { ws: null, running: false, stream: null, effective: 'main', hasHeading: false, heading: null, fovLong: 69, seq: 0, t0: 0, sent: {}, fps: 3,
-            timer: null, severity: {}, alertsOn: true, rec: null, alertTimer: null, rtt: null, compute: null, entries: [], size: [16, 9], boxes: [], boxesAt: 0, retry: null, wake: null, sensorsNote: '' };
+            timer: null, lastResultAt: 0, stale: false, staleAt: 0, lost: false, severity: {}, alertsOn: true, rec: null, alertTimer: null, rtt: null, compute: null, entries: [], size: [16, 9], boxes: [], boxesAt: 0, retry: null, wake: null, sensorsNote: '' };
   var params = new URLSearchParams(location.search), token = params.get('token');
 
   function setStatus(text, cls) { $('status').textContent = text; $('dot').className = 'dot' + (cls ? ' ' + cls : ''); }
@@ -153,7 +170,7 @@
       };
       ws.onmessage = function (ev) {
         var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-        if (m.type === 'ready') { done = true; S.fovLong = m.fov_long_deg; setNames(m.names_ru); S.severity = m.severity || {}; S.alertsOn = !!m.alerts_enabled; setStatus('подключено · ' + m.detector + ' · помощник: ' + (m.agent === 'claude' ? 'Claude' : 'офлайн'), 'on');
+        if (m.type === 'ready') { done = true; S.fovLong = m.fov_long_deg; setNames(m.names_ru); S.lastResultAt = performance.now(); if (S.lost) { S.lost = false; showAlert({ level: 'caution', text: 'Связь с сервером восстановлена.' }); } S.severity = m.severity || {}; S.alertsOn = !!m.alerts_enabled; setStatus('подключено · ' + m.detector + ' · помощник: ' + (m.agent === 'claude' ? 'Claude' : 'офлайн'), 'on');
           if (m.agent_warning) note(m.agent_warning); resolve(m); }
         else if (m.type === 'result') onResult(m);
         else if (m.type === 'chat_reply') { addMsg(m.text, 'bot', (m.agent === 'claude' ? 'Claude' : 'офлайн') + (m.tools && m.tools.length ? ' · ' + m.tools.join(', ') : '')); speak(m.text, 'normal'); }
@@ -163,7 +180,7 @@
       ws.onerror = function () { if (!done) reject(new Error('не удалось подключиться к серверу')); };
       ws.onclose = function () {
         S.sent = {};
-        if (S.running) { setStatus('соединение потеряно, переподключаюсь…', 'err'); clearTimeout(S.retry); S.retry = setTimeout(function () { if (S.running) connect().catch(function () {}); }, 2000); }
+        if (S.running) { if (!S.lost) { S.lost = true; showAlert({ level: 'danger', text: 'Связь с сервером потеряна. Не полагайтесь на подсказки.' }); } setStatus('соединение потеряно, переподключаюсь…', 'err'); clearTimeout(S.retry); S.retry = setTimeout(function () { if (S.running) connect().catch(function () {}); }, 2000); }
         else setStatus('не подключено', '');
         if (!done) reject(new Error('соединение закрыто'));
       };
@@ -187,11 +204,17 @@
   }
   function tick() {
     if (!S.running) return; var t0 = performance.now();
+    if (isStale(S.lastResultAt, t0, STALE_MS) && !S.lost) {                                   // connected, but nothing comes back
+      S.stale = true;
+      if (t0 - S.staleAt > 15000) { S.staleAt = t0; showAlert({ level: 'danger', text: 'Подсказки не обновляются. Не полагайтесь на них.' }); }
+    }
     if (Object.keys(S.sent).length < 2) captureAndSend();                                  // never more than two frames in flight
     S.timer = setTimeout(tick, Math.max(10, 1000 / S.fps - (performance.now() - t0)));
   }
 
   function onResult(m) {
+    if (S.stale) { S.stale = false; showAlert({ level: 'caution', text: 'Подсказки снова обновляются.' }); }
+    S.lastResultAt = performance.now();
     var sent = S.sent[m.seq]; delete S.sent[m.seq];
     if (sent !== undefined) { var r = performance.now() - sent; S.rtt = S.rtt === null ? r : 0.8 * S.rtt + 0.2 * r; }
     S.compute = S.compute === null ? m.compute_ms : 0.8 * S.compute + 0.2 * m.compute_ms;
@@ -224,11 +247,14 @@
     s.appendChild(svg('circle', { cx: C, cy: C, r: 5, fill: '#e8eef5' }));
     s.appendChild(svg('text', { x: C, y: 14, 'text-anchor': 'middle', fill: '#8fa1b3', 'font-size': 11 }, 'вперёд'));
     var col = { confirmed: '#3ecf8e', provisional: '#f5a524', remembered: '#8fa1b3' };
-    entries.forEach(function (v) {
-      var a = v.rel_az_deg * Math.PI / 180, known = v.range_m !== null && v.range_m !== undefined;
-      var r = known ? 30 + 105 * Math.min(1, Math.log(Math.max(v.range_m, 1)) / Math.log(20)) : 135, x = C + r * Math.sin(a), y = C - r * Math.cos(a);
-      s.appendChild(svg('circle', { cx: x, cy: y, r: 6, fill: known ? col[v.status] : 'none', stroke: col[v.status], 'stroke-width': 2, 'stroke-dasharray': known ? '' : '3 2', opacity: v.status === 'remembered' ? 0.6 : 1 }));
-      s.appendChild(svg('text', { x: x + (Math.sin(a) >= 0 ? 9 : -9), y: y + 4, 'text-anchor': Math.sin(a) >= 0 ? 'start' : 'end', fill: '#e8eef5', 'font-size': 11 }, nameRu(v.name)));
+    groupForRadar(entries, S.severity).forEach(function (g) {
+      var a = g.rel_az_deg * Math.PI / 180, known = g.range_m !== null, c = g.danger ? '#ff6b6b' : col[g.status];
+      var r = known ? 30 + 105 * Math.min(1, Math.log(Math.max(g.range_m, 1)) / Math.log(20)) : 135, x = C + r * Math.sin(a), y = C - r * Math.cos(a);
+      s.appendChild(svg('circle', { cx: x, cy: y, r: g.live ? 6 : 4, fill: c, opacity: g.live ? (known ? 1 : 0.55) : 0.35, stroke: g.danger ? '#ffd7d7' : 'none', 'stroke-width': 1.5 }));
+      if (g.live || g.danger) {                                                              // remembered objects stay faint and unlabeled
+        var right = Math.sin(a) >= 0, label = nameRu(g.name) + (g.count > 1 ? ' ×' + g.count : '');
+        s.appendChild(svg('text', { x: x + (right ? 9 : -9), y: y + 4, 'text-anchor': right ? 'start' : 'end', fill: '#e8eef5', 'font-size': 11 }, label));
+      }
     });
     box.appendChild(s);
   }

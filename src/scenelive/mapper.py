@@ -18,7 +18,12 @@ def _find(p, i):
 
 
 def build_map(tracks, now_t: float, cfg: MapConfig, fast_cfg: FastConfig) -> list[Entry]:
-    elig = [tr for tr in tracks if tr.hits >= cfg.min_obs and tr.obs and tr.conf >= fast_cfg.min_conf_publish]
+    by = fast_cfg.publish_hits_by_class
+    def eligible(tr) -> bool:
+        if not tr.obs or tr.conf < fast_cfg.min_conf_publish: return False
+        if tr.name in by: return tr.hits >= by[tr.name]                                   # false-alarm-prone classes: more sightings, no shortcut
+        return tr.hits >= cfg.min_obs or tr.conf >= cfg.single_conf                       # a sure glimpse is remembered too
+    elig = [tr for tr in tracks if eligible(tr)]
     groups: dict[str, list] = {}
     for tr in elig: groups.setdefault(tr.name, []).append(tr)
     out: list[Entry] = []

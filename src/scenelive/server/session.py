@@ -38,7 +38,7 @@ def camera_from_hello(hello: dict) -> CameraConfig:
 class LiveSession:
     def __init__(self, detector, hello: dict, cfg, fast_cfg: FastConfig | None = None, map_cfg: MapConfig | None = None, ground_classifier=None):
         self.ground_classifier = ground_classifier; self.cfg = cfg; self.hello = hello; self.cam_cfg = camera_from_hello(hello)
-        self.fast_cfg = fast_cfg or FastConfig(imgsz=cfg.imgsz, conf=cfg.conf); self.map_cfg = map_cfg or MapConfig(interval_s=cfg.map_interval_s)
+        self.fast_cfg = fast_cfg or FastConfig(imgsz=cfg.imgsz, conf=getattr(cfg, 'floor_conf', 0.15), start_conf=cfg.conf); self.map_cfg = map_cfg or MapConfig(interval_s=cfg.map_interval_s)
         self.detector = detector; self.lock = threading.RLock(); self.timer = Timer(); self.created = time.time()
         self.has_heading = bool(hello.get("has_heading")); self.reset()
 
@@ -51,7 +51,7 @@ class LiveSession:
             from ..alerts import AlertEngine
             self.alerts = AlertEngine(getattr(self.cfg, 'alert_cooldown_s', 15.0), getattr(self.cfg, 'alert_range_m', 6.0)) if getattr(self.cfg, 'alerts', True) else None
             self.ground_state = None
-            self.olist = ObjectList(); self.t = 0.0; self.heading = 0.0; self.frames = 0; self.next_map = self.map_cfg.interval_s
+            self._prev_fast: set = set(); self.olist = ObjectList(); self.t = 0.0; self.heading = 0.0; self.frames = 0; self.next_map = self.map_cfg.interval_s
 
     # ------------------------------------------------------------------ frames
     def process(self, jpeg: bytes, meta: dict) -> dict:
@@ -65,10 +65,11 @@ class LiveSession:
             res = self.fast.process(frame, t, seq); tim.update(res.timings)
             if res.ground is not None: self.ground_state = res.ground
             self.olist.apply_fast(res.entries, t); self.heading = res.yaw; self.t = max(self.t, t); self.frames += 1
-            while t >= self.next_map:
+            now_keys = set(self.olist.fast); vanished = self._prev_fast - now_keys; self._prev_fast = now_keys
+            if vanished or t >= self.next_map:                  # the moment an object leaves the live list it must already be in the map: no gap of amnesia
                 with self.timer.stage("map_build", tim):
                     self.olist.apply_map(build_map(self.fast.tracker.all_tracks(), t, self.map_cfg, self.fast_cfg), t)
-                self._forget(t); self.next_map += self.map_cfg.interval_s
+                self._forget(t); self.next_map = t + self.map_cfg.interval_s
             view = self.view(); alerts = self.alerts.update(view, res.ground, t) if self.alerts is not None else []
         w, h = res.size
         boxes = [{"id": tr["id"], "name": tr["name"], "status": tr["status"], "conf": round(tr["conf"], 2), "x0": round(tr["box"][0] / w, 4),
@@ -80,7 +81,10 @@ class LiveSession:
     def view(self) -> list[dict]:
         with self.lock:
             out = self.olist.view(self.heading)
-            for v in out: v["age_s"] = round(max(0.0, self.t - v["last_t"]), 1)
+            for v in out:
+                v["age_s"] = round(max(0.0, self.t - v["last_t"]), 1)
+                if v["status"] == "confirmed" and v["source"] == "map" and self.t - v["last_t"] > self.map_cfg.remembered_after_s:
+                    v["status"] = "remembered"             # decided NOW, not at the last map run: out of view means out of view
             return out
 
     def _forget(self, t: float) -> None:

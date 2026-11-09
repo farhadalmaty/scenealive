@@ -89,7 +89,7 @@ class Tracker:
         for i, tr in enumerate(self.active):
             if i not in used_t: tr.misses += 1
         for j, d in enumerate(dets):
-            if j in used_d: continue
+            if j in used_d or d.conf < c.start_conf: continue                      # a weak detection may continue a track (above) but never starts one
             tr = Track(self._next, d, t, frame); self._next += 1; self.active.append(tr); matches.append((tr, d))
         keep = []
         for tr in self.active:

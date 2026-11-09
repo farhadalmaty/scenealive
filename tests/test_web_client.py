@@ -55,6 +55,23 @@ class TestPureHelpers(unittest.TestCase):
         self.assertEqual([c["zone"] for c in out["chips"]], ["слева", "впереди"]); self.assertTrue(out["chips"][1]["bad"]); self.assertFalse(out["chips"][0]["bad"]); self.assertEqual(out["none"], [])
         self.assertEqual((out["before"], out["after"], out["fallback"], out["dyn"]), ("knife", "нож", "zebra", "человек!"))                       # names from the server win over the built-in ones
 
+    def test_the_radar_groups_duplicates_and_keeps_memory_apart(self):
+        out = node("""const S=require(process.argv[1]); const e=(n,az,st,r)=>({name:n,rel_az_deg:az,status:st,range_m:r});
+          const g=S.groupForRadar([e('person',2,'confirmed',5),e('person',10,'provisional',3),e('person',12,'confirmed',null),e('person',2,'remembered',5),e('knife',-80,'confirmed',2),e('door',50,'remembered',null)], {knife:'danger'});
+          const many=[]; for(let i=0;i<60;i++) many.push(e('tree'+i,i*5-150,'confirmed',i)); console.log(JSON.stringify({g:g, n:S.groupForRadar(many,{}).length, empty:S.groupForRadar(null,{})}))""")
+        by = {(m["name"], m["live"]): m for m in out["g"]}
+        self.assertEqual(by[("person", True)]["count"], 3); self.assertEqual(by[("person", True)]["status"], "confirmed"); self.assertEqual(by[("person", True)]["range_m"], 3)         # one marker, nearest range
+        self.assertEqual(by[("person", False)]["count"], 1); self.assertTrue(by[("knife", True)]["danger"]); self.assertFalse(by[("door", False)]["live"])                          # memory kept apart
+        self.assertEqual(out["n"], 24); self.assertEqual(out["empty"], []); self.assertTrue(out["g"][0]["live"]); self.assertEqual(out["g"][0]["name"], "knife")                       # live first, then the nearest
+
+    def test_staleness_check(self):
+        out = node("const S=require(process.argv[1]); console.log(JSON.stringify([S.isStale(0,99999),S.isStale(1000,3000),S.isStale(1000,5100),S.isStale(1000,5100,10000),S.isStale(1000,4999)]))")
+        self.assertEqual(out, [False, False, True, False, False])                                          # never before the first result; 4 s by default
+
+    def test_the_page_warns_aloud_when_the_connection_or_the_results_stop(self):
+        js = open(APP_JS, encoding="utf-8").read()
+        for phrase in ("Связь с сервером потеряна. Не полагайтесь на подсказки.", "Подсказки не обновляются. Не полагайтесь на них.", "Связь с сервером восстановлена.", "Подсказки снова обновляются."): self.assertIn(phrase, js)
+
     def test_texts(self):
         out = node("const S=require(process.argv[1]); console.log(JSON.stringify([S.rangeText('~5 m'),S.rangeText('10-15 m'),S.rangeText('15+ m'),S.rangeText('?'),S.clockText(3,false),S.clockText(12,false),S.nameRu('person'),S.nameRu('zebra')]))")
         self.assertEqual(out, ["около 5 м", "10–15 м", "дальше 15 м", "расстояние неизвестно", "справа (3 ч)", "прямо по курсу (12 ч)", "человек", "zebra"])

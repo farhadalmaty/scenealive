@@ -14,8 +14,9 @@ class ServerConfig:
     weights: str | None = None
     device: str | None = None
     imgsz: int = 640
-    conf: float = 0.30
-    map_interval_s: float = 6.0
+    conf: float = 0.30                  # a track may START at this confidence
+    floor_conf: float = 0.15            # weaker detections may only continue a track
+    map_interval_s: float = 1.0         # the map is cheap (milliseconds): rebuilt every second and whenever an object drops out of the live list
     max_sessions: int = 2
     max_frame_bytes: int = 400_000      # larger frames are refused
     idle_timeout_s: float = 180.0       # a connection that says nothing for this long is closed

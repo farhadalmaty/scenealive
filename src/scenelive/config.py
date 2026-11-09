@@ -1,6 +1,6 @@
 """All tunable numbers in one place. Every dataclass is dumped into the run report, so a run is reproducible."""
 from __future__ import annotations
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 
 @dataclass
@@ -11,13 +11,16 @@ class CameraConfig:
 @dataclass
 class FastConfig:
     imgsz: int = 640                  # long side of the frame the detector sees (smaller = faster)
-    conf: float = 0.30                # detector confidence floor
+    conf: float = 0.15                # detector confidence FLOOR: weak detections may continue a track (hysteresis) but never start one
+    start_conf: float = 0.30          # a track may be started only by a detection at least this sure
     min_conf_publish: float = 0.30    # a track is shown in the list only if its name confidence reaches this
     publish_hits: int = 2             # ... and it was detected in at least this many frames ...
     publish_single_conf: float = 0.55 # ... unless one detection is already this sure (then the name appears at once)
     confirm_hits: int = 3             # detections needed before a track is "confirmed"
     confirm_conf: float = 0.40        # ... and the name confidence needed for it
-    max_age_frames: int = 6           # a track is dropped after this many missed frames
+    max_age_frames: int = 10          # a track is dropped after this many missed frames (kept longer: detectors flicker)
+    publish_misses: int = 2           # an entry is shown as 'in view' for this many missed frames, then it lives on in the map as 'remembered'
+    publish_hits_by_class: dict = field(default_factory=lambda: {"billboard": 4, "stroller": 4, "can": 4, "kiosk": 4, "mailbox": 4, "wheelchair": 4, "shopping cart": 4})   # classes that were seen to fire falsely need more sightings
     iou_match: float = 0.25           # minimum (class-weighted) IoU to continue a track
     min_box_px: int = 6               # ignore boxes smaller than this (either side)
 
@@ -27,8 +30,9 @@ class MapConfig:
     interval_s: float = 6.0           # the map loop runs this often (video time)
     az_merge_deg: float = 6.0         # tracks of the same class closer than this in world azimuth are one object
     min_obs: int = 2                  # tracks with fewer detections are not mapped (still shown by the fast loop)
+    single_conf: float = 0.55         # ... unless one detection is already this sure (a glimpse of a car must not be forgotten)
     moving_gap_s: float = 3.0         # a moving class continues an object only after a gap shorter than this
-    remembered_after_s: float = 2.5   # not seen for this long -> status "remembered"
+    remembered_after_s: float = 1.0   # not seen for this long -> status "remembered" (out of view now)
 
 
 @dataclass

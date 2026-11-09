@@ -52,11 +52,12 @@ class FastPath:
         with st("track", tim):
             dx = -cam.f * math.tan(math.radians(dyaw))                    # camera turned right -> image content moves left
             matches = self.tracker.update(dets, t, idx, dx)
+        strong = [(tr, d) for tr, d in matches if d.conf >= self.cfg.start_conf]      # weak matches only keep a track alive
         with st("name", tim):
-            for tr, d in matches: tr.vote(d)
+            for tr, d in strong: tr.vote(d)
         with st("locate", tim):
             snap = []
-            for tr, d in matches:
+            for tr, d in strong:
                 az = cam.azimuth_deg(d.cx); wa = wrap360(yaw + az)
                 edge = d.box[0] <= 2.0 or d.box[2] >= cam.width - 2.0
                 tr.obs.append(Obs(t, idx, az, wa, cam.elevation_deg(d.cy), d.box, d.name, d.conf, estimate_range(d.name, d.box, cam, az), None, edge))
@@ -66,10 +67,14 @@ class FastPath:
             with st("ground", tim): self.ground.update(frame, t)
         with st("list", tim):
             cfg = self.cfg
-            entries = [self._entry(tr) for tr in self.tracker.active
-                       if tr.misses <= cfg.max_age_frames // 2 and tr.conf >= cfg.min_conf_publish
-                       and (tr.hits >= cfg.publish_hits or tr.conf >= cfg.publish_single_conf)]     # one weak detection is flicker, not an object
+            entries = [self._entry(tr) for tr in self.tracker.active if tr.obs and tr.misses <= cfg.publish_misses and tr.conf >= cfg.min_conf_publish and self._sure_enough(tr)]
         return FrameResult(t, idx, yaw, (frame.shape[1], frame.shape[0]), dets, snap, entries, tim, self.ground.state() if self.ground is not None else None)
+
+    def _sure_enough(self, tr) -> bool:
+        """One weak detection is flicker, not an object. Classes that fired falsely need more sightings and no single-shot shortcut."""
+        need = self.cfg.publish_hits_by_class.get(tr.name)
+        if need is not None: return tr.hits >= need
+        return tr.hits >= self.cfg.publish_hits or tr.conf >= self.cfg.publish_single_conf
 
     def _entry(self, tr) -> Entry:
         recent = tr.obs[-5:]; last = ([o for o in recent if not o.edge] or recent)[-3:]; az = circular_mean([o.world_az for o in last])

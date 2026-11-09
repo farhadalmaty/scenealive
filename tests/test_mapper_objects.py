@@ -50,8 +50,10 @@ class TestMapper(unittest.TestCase):
         self.assertEqual(build_map([t], 11.0, M, F)[0].status, "confirmed"); self.assertEqual(build_map([t], 14.0, M, F)[0].status, "remembered")
 
     def test_weak_tracks_are_not_mapped(self):
-        self.assertEqual(build_map([make_track(1, "door", 0, 0, 60, n=1)], 5, M, F), [])                         # seen once
+        self.assertEqual(build_map([make_track(1, "door", 0, 0, 60, n=1, conf=0.4)], 5, M, F), [])                # seen once and not sure: noise
         self.assertEqual(build_map([make_track(1, "door", 0, 3, 60, conf=0.1)], 5, M, F), [])                    # name too unsure
+        glimpse = build_map([make_track(1, "car", 0, 0, 60, n=1, conf=0.9)], 5, M, F); self.assertEqual(len(glimpse), 1)   # a SURE glimpse is remembered
+        for hits, n_obj in ((3, 0), (4, 1)): self.assertEqual(len(build_map([make_track(1, "billboard", 0, 3, 60, n=hits, conf=0.9)], 5, M, F)), n_obj)    # a false-alarm-prone class needs 4 sightings
 
     def test_range_is_the_median_with_less_uncertainty_than_one_observation(self):
         t = make_track(1, "person", 0, 4, 10, n=9, rng=(6.0, 0.2)); e = build_map([t], 5.0, M, F)[0]

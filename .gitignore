@@ -1,87 +1,15 @@
-# ===== Python =====
+.venv/
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
 *.egg-info/
-.eggs/
-build/
-dist/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.ipynb_checkpoints/
-
-# ===== Виртуальные окружения =====
-venv/
-.venv/
-env/
-ENV/
-conda-env/
-
-# ===== Секреты и ключи (API-ключи для AI-агента, токены) =====
-.env
-.env.*
-!.env.example
-secrets.json
-*.secret
-
-# ===== HTTPS-сертификаты (для камеры в браузере) =====
-*.pem
-*.key
-*.crt
-*.pfx
-*.p12
-
-# ===== Веса моделей (большие файлы, GitHub не примет >100 МБ) =====
-*.pt
-*.pth
-*.ckpt
-*.onnx
-*.engine
-*.tflite
-*.safetensors
-*.bin
-*.h5
-*.pb
-*.mlmodel
-*.mlpackage/
-models/
-weights/
-checkpoints/
-
-# ===== Видео, кадры, результаты работы =====
-*.mp4
-*.mov
-*.avi
-*.mkv
-*.MOV
-*.MP4
-data/
-videos/
-frames/
-outputs/
-output/
-results/
 runs/
-logs/
-*.log
-*.ply
-*.npy
-*.npz
-
-# ===== Node / фронтенд (если есть) =====
-node_modules/
-.next/
-.cache/
-
-# ===== IDE и редакторы =====
-.vscode/
-.idea/
-*.swp
-*.code-workspace
-
-# ===== Системные файлы =====
-Thumbs.db
-desktop.ini
-.DS_Store
+out/
+*.[mM][pP]4
+*.[mM][oO][vV]
+*.[aA][vV][iI]
+*.[mM][kK][vV]
+*.[pP][tT]
+*.[oO][nN][nN][xX]
+*.[jJ][pP][gG]
+*.[pP][nN][gG]
+.env

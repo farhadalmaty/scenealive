@@ -120,8 +120,21 @@ def range_ru(label: str) -> str:
     return label.replace("-", "–").replace(" m", " м")
 
 
+def plural(n: int, one: str, few: str, many: str) -> str:
+    n = abs(int(n)); return one if (n % 10 == 1 and n % 100 != 11) else (few if (2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14) else many)
+
+
+def ago_ru(seconds: float) -> str:
+    """'7 секунд назад', '1 минуту назад' ..."""
+    s = int(round(seconds))
+    if s < 60: return f"{s} {plural(s, 'секунду', 'секунды', 'секунд')} назад"
+    m = s // 60
+    return f"{m} {plural(m, 'минуту', 'минуты', 'минут')} назад"
+
+
 def describe(v: dict) -> str:
-    tail = {"provisional": ", предварительно", "remembered": ", сейчас вне кадра", "confirmed": ""}[v["status"]]
+    tail = {"provisional": ", предварительно", "confirmed": "", "remembered": ", сейчас вне кадра"}[v["status"]]
+    if v["status"] == "remembered" and (v.get("age_s") or 0) >= 1: tail += f", видел {ago_ru(v['age_s'])}"
     return f"{name_ru(v['name'])}: {clock_ru(v['clock'], v['behind'])}, {range_ru(v['range'])}{tail}"
 
 
@@ -215,7 +228,9 @@ TOOL_NAMES = {t["name"] for t in TOOL_SCHEMAS}
 
 SYSTEM_PROMPT = """You are the assistant of a live camera app. A phone camera streams video; the app keeps a list of objects with a name, a direction and a distance estimate. You answer questions about the surroundings using ONLY the tools; never invent objects, directions or distances.
 Rules:
+- The user may be blind or have low vision and may be walking: be calm, concrete and brief; give directions as left / right / ahead / behind with a rough distance; put danger first.
 - Answer in the user's language (usually Russian). Keep answers to one to three short sentences: they may be read aloud.
+- For an object whose status is 'remembered' say that it is out of view now and how long ago it was last seen (age_s).
 - Directions are relative to where the camera points now: 12 o'clock = straight ahead, 3 = right, 6 = behind, 9 = left. Say it naturally ("справа", "слева-спереди").
 - Distances are ESTIMATES from typical object size: say "около 5 м" or a range, never an exact number; if the range is '?' say the distance is unknown. Never claim precision.
 - status 'provisional' means just seen, not yet confirmed; 'remembered' means it is out of view right now. Mention this when it matters.
