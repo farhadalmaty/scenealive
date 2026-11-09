@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1419">
+<title>scenelive</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>scenelive</h1>
+  <span id="dot" class="dot" title="состояние соединения"></span>
+  <span id="status">не подключено</span>
+</header>
+<div id="alert" class="alert hidden" role="alert" aria-live="assertive"></div>
+<main>
+  <section id="camera-panel">
+    <div id="video-wrap" class="video-wrap">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="controls">
+      <button id="start" class="primary" type="button">Начать</button>
+      <label>Камера
+        <select id="camera">
+          <option value="ultrawide">Сверхширокая 0,5× (по возможности)</option>
+          <option value="main">Основная 1×</option>
+          <option value="tele">Телеобъектив</option>
+        </select>
+      </label>
+      <label>Кадров в секунду
+        <select id="fps"><option>2</option><option selected>3</option><option>4</option><option>5</option></select>
+      </label>
+      <label>Угол обзора, ° (необязательно)
+        <input id="fov" type="number" min="20" max="140" placeholder="авто">
+      </label>
+      <label class="check"><input id="boxes" type="checkbox" checked> рамки на видео</label>
+      <label class="check"><input id="voice" type="checkbox" checked> озвучивать ответы и предупреждения</label>
+    </div>
+    <div id="ground" class="ground"></div>
+    <div id="notes" class="notes"></div>
+  </section>
+
+  <section id="list-panel">
+    <h2>Вижу</h2>
+    <div id="radar" class="radar"></div>
+    <ul id="list" class="list"></ul>
+    <button id="reset" type="button" class="secondary">Новый маршрут (очистить список)</button>
+  </section>
+
+  <section id="chat-panel">
+    <h2>Помощник</h2>
+    <div id="messages" class="messages"></div>
+    <div class="quick">
+      <button type="button" data-q="Что вокруг?">Что вокруг?</button>
+      <button type="button" data-q="Что ближайшее?">Что ближайшее?</button>
+      <button type="button" data-q="Что впереди?">Что впереди?</button>
+      <button type="button" data-q="Что слева?">Что слева?</button>
+      <button type="button" data-q="Что справа?">Что справа?</button>
+      <button type="button" data-q="Какая дорога?">Какая дорога?</button>
+      <button type="button" data-q="Что опасного?">Что опасного?</button>
+    </div>
+    <div class="chat-input">
+      <input id="chat-text" type="text" placeholder="Спросите о том, что вокруг" autocomplete="off" enterkeyhint="send">
+      <button id="mic" type="button" title="Нажмите и скажите вопрос">Говорить</button>
+      <button id="chat-send" type="button" class="primary">Спросить</button>
+    </div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
