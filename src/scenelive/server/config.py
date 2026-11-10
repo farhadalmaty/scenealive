@@ -22,6 +22,11 @@ class ServerConfig:
     idle_timeout_s: float = 180.0       # a connection that says nothing for this long is closed
     memory_minutes: float = 10.0        # tracks older than this are forgotten (keeps the map fast in long sessions)
     max_tracks: int = 800
+    seg: str = "none"                   # segmentation of floor / walls / road for "where to go": none | segformer | colors
+    seg_size: int = 0                   # model input, long side in pixels (0 = the model default 512x512)
+    seg_every_s: float = 1.0
+    seg_sync: bool = False              # tests only: run the model inline instead of in a thread
+    camera_height_m: float = 1.4        # a hand-held phone; the distances to obstacles scale with it
     alerts: bool = True                 # spoken/visual warnings about danger, close vehicles, bad surface
     alert_cooldown_s: float = 15.0
     alert_range_m: float = 6.0

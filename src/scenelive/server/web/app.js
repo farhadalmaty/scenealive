@@ -101,7 +101,22 @@
   var STALE_MS = 4000;
   function isStale(lastAt, now, limitMs) { return lastAt > 0 && (now - lastAt) > (limitMs || STALE_MS); }
 
-  var SL = { isStale: isStale, groupForRadar: groupForRadar, setNames: setNames, metresWord: metresWord, speechText: speechText, groundChips: groundChips, nameRu: nameRu, compassHeading: compassHeading, horizontalFov: horizontalFov, packFrame: packFrame,
+  /* Tilt of the camera below the horizon, degrees (positive = looking down). Camera looks along -Z of the device: elevation = -asin(cos(beta) cos(gamma)). */
+  function cameraPitch(beta, gamma) {
+    var d = Math.PI / 180, v = Math.cos(beta * d) * Math.cos(gamma * d);
+    return Math.asin(Math.max(-1, Math.min(1, v))) / d;
+  }
+
+  /* Sectors of free floor for the radar: [{a0, a1, r, level}], angles relative to straight ahead, r in radar units (log scale like the markers). */
+  function freeWedges(fs) {
+    if (!fs || !fs.available || !fs.reliable || fs.uncertain) return [];
+    return (fs.sectors || []).map(function (s) {
+      var d = s.free_safe_m, r = s.capped ? 135 : 30 + 105 * Math.min(1, Math.log(Math.max(d, 1)) / Math.log(20));
+      return { a0: s.lo, a1: s.hi, r: r, level: d < 1.5 ? 'stop' : (d < 3 ? 'caution' : 'ok'), blocker: s.blocker };
+    });
+  }
+
+  var SL = { cameraPitch: cameraPitch, freeWedges: freeWedges, isStale: isStale, groupForRadar: groupForRadar, setNames: setNames, metresWord: metresWord, speechText: speechText, groundChips: groundChips, nameRu: nameRu, compassHeading: compassHeading, horizontalFov: horizontalFov, packFrame: packFrame,
              pickCameraDevice: pickCameraDevice, clockText: clockText, rangeText: rangeText, STATUS_RU: STATUS_RU };
   if (typeof module !== 'undefined' && module.exports) { module.exports = SL; return; }
   if (typeof document === 'undefined') return;
@@ -109,7 +124,7 @@
   /* ------------------------------------------------------------------------------------------------ page */
   var $ = function (id) { return document.getElementById(id); };
   var S = { ws: null, running: false, stream: null, effective: 'main', hasHeading: false, heading: null, fovLong: 69, seq: 0, t0: 0, sent: {}, fps: 3,
-            timer: null, lastResultAt: 0, stale: false, staleAt: 0, lost: false, severity: {}, alertsOn: true, rec: null, alertTimer: null, rtt: null, compute: null, entries: [], size: [16, 9], boxes: [], boxesAt: 0, retry: null, wake: null, sensorsNote: '' };
+            timer: null, pitch: null, free: null, lastResultAt: 0, stale: false, staleAt: 0, lost: false, severity: {}, alertsOn: true, rec: null, alertTimer: null, rtt: null, compute: null, entries: [], size: [16, 9], boxes: [], boxesAt: 0, retry: null, wake: null, sensorsNote: '' };
   var params = new URLSearchParams(location.search), token = params.get('token');
 
   function setStatus(text, cls) { $('status').textContent = text; $('dot').className = 'dot' + (cls ? ' ' + cls : ''); }
@@ -123,7 +138,7 @@
   /* ---- sensors (heading) */
   function onOrientation(ev) {
     if (ev.alpha == null || ev.beta == null || ev.gamma == null) return;
-    S.heading = compassHeading(ev.alpha, ev.beta, ev.gamma);
+    S.heading = compassHeading(ev.alpha, ev.beta, ev.gamma); S.pitch = cameraPitch(ev.beta, ev.gamma);
   }
   function startSensors() {
     return new Promise(function (resolve) {
@@ -193,12 +208,12 @@
     var v = $('video'), w = v.videoWidth, h = v.videoHeight; if (!w || !h || !S.ws || S.ws.readyState !== 1) return;
     var s = 640 / Math.max(w, h); cv.width = Math.round(w * s); cv.height = Math.round(h * s);
     cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
-    var seq = S.seq++, t = (performance.now() - S.t0) / 1000, yaw = S.hasHeading && S.heading !== null ? S.heading : null;
+    var seq = S.seq++, t = (performance.now() - S.t0) / 1000, yaw = S.hasHeading && S.heading !== null ? S.heading : null, pitch = S.hasHeading && S.pitch !== null ? Math.round(S.pitch * 10) / 10 : null;
     S.sent[seq] = performance.now(); S.size = [cv.width, cv.height];
     cv.toBlob(function (blob) {
       if (!blob) { delete S.sent[seq]; return; }
       blob.arrayBuffer().then(function (buf) {
-        if (S.ws && S.ws.readyState === 1) S.ws.send(packFrame({ seq: seq, t: Math.round(t * 1000) / 1000, yaw: yaw, w: cv.width, h: cv.height }, buf)); else delete S.sent[seq];
+        if (S.ws && S.ws.readyState === 1) S.ws.send(packFrame({ seq: seq, t: Math.round(t * 1000) / 1000, yaw: yaw, pitch: pitch, w: cv.width, h: cv.height }, buf)); else delete S.sent[seq];
       });
     }, 'image/jpeg', 0.7);
   }
@@ -220,6 +235,7 @@
     S.compute = S.compute === null ? m.compute_ms : 0.8 * S.compute + 0.2 * m.compute_ms;
     S.entries = m.entries; S.boxes = m.boxes; S.boxesAt = performance.now();
     setStatus('подключено · круг ' + Math.round(S.rtt || 0) + ' мс · сервер ' + Math.round(S.compute) + ' мс · ' + S.fps + ' к/с', 'on');
+    S.free = m.free_space; renderWay(m.free_space);
     renderList(m.entries); renderRadar(m.entries); drawBoxes(); renderGround(m.ground);
     (m.alerts || []).forEach(showAlert);
   }
@@ -244,6 +260,11 @@
     [45, 90, 135].forEach(function (r) { s.appendChild(svg('circle', { cx: C, cy: C, r: r, fill: 'none', stroke: '#2a3541', 'stroke-width': 1 })); });
     var hf = horizontalFov(S.fovLong, S.size[0], S.size[1]) / 2 * Math.PI / 180, R = 135;
     s.appendChild(svg('path', { d: 'M' + C + ' ' + C + ' L' + (C - R * Math.sin(hf)) + ' ' + (C - R * Math.cos(hf)) + ' A' + R + ' ' + R + ' 0 0 1 ' + (C + R * Math.sin(hf)) + ' ' + (C - R * Math.cos(hf)) + ' Z', fill: '#4aa3ff', 'fill-opacity': 0.12, stroke: '#4aa3ff', 'stroke-opacity': 0.5 }));
+    var wcol = { ok: '#3ecf8e', caution: '#f5a524', stop: '#ff6b6b' };
+    freeWedges(S.free).forEach(function (w) {                                             // free floor: how far, per sector (green far, amber near, red very near)
+      var a0 = w.a0 * Math.PI / 180, a1 = w.a1 * Math.PI / 180, x0 = C + w.r * Math.sin(a0), y0 = C - w.r * Math.cos(a0), x1 = C + w.r * Math.sin(a1), y1 = C - w.r * Math.cos(a1);
+      s.appendChild(svg('path', { d: 'M' + C + ' ' + C + ' L' + x0 + ' ' + y0 + ' A' + w.r + ' ' + w.r + ' 0 0 1 ' + x1 + ' ' + y1 + ' Z', fill: wcol[w.level], 'fill-opacity': 0.25, stroke: wcol[w.level], 'stroke-opacity': 0.6 }));
+    });
     s.appendChild(svg('circle', { cx: C, cy: C, r: 5, fill: '#e8eef5' }));
     s.appendChild(svg('text', { x: C, y: 14, 'text-anchor': 'middle', fill: '#8fa1b3', 'font-size': 11 }, 'вперёд'));
     var col = { confirmed: '#3ecf8e', provisional: '#f5a524', remembered: '#8fa1b3' };
@@ -268,6 +289,13 @@
       g.strokeStyle = color; g.strokeRect(x, y, ww, hh); var label = nameRu(b.name), tw = g.measureText(label).width + 8;
       g.fillStyle = color; g.fillRect(x, Math.max(0, y - 18), tw, 18); g.fillStyle = '#06121f'; g.fillText(label, x + 4, Math.max(13, y - 5));
     });
+  }
+
+  /* ---- where to go: one line under the radar */
+  function renderWay(fs) {
+    var el = $('way');
+    if (!fs) { el.className = 'way hidden'; el.textContent = ''; return; }
+    var a = fs.advice || { level: 'unsure', text: '' }; el.className = 'way level-' + a.level; el.textContent = a.text;
   }
 
   /* ---- ground strip and alerts */
@@ -327,7 +355,7 @@
     S.running = false; clearTimeout(S.timer); clearTimeout(S.retry);
     if (S.ws) { try { S.ws.close(); } catch (e) {} } if (S.stream) S.stream.getTracks().forEach(function (t) { t.stop(); });
     if (S.wake) { try { S.wake.release(); } catch (e) {} S.wake = null; }
-    try { if ('speechSynthesis' in window) speechSynthesis.cancel(); if (S.rec) S.rec.stop(); } catch (e) {} renderGround(null); $('alert').className = 'alert hidden';
+    try { if ('speechSynthesis' in window) speechSynthesis.cancel(); if (S.rec) S.rec.stop(); } catch (e) {} renderGround(null); renderWay(null); S.free = null; $('alert').className = 'alert hidden';
     $('video').srcObject = null; var b = $('start'); b.textContent = 'Начать'; b.classList.remove('stop'); setStatus('не подключено', ''); drawBoxes();
   }
 

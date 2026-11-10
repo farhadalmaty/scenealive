@@ -39,3 +39,6 @@ button.secondary { margin-top:10px; width:100%; font-size:13px; color:var(--mute
 .gchip.good { border-color:var(--ok); } .gchip.fair { border-color:var(--warn); } .gchip.bad { border-color:var(--bad); background:#2a1414; }
 .item.danger { border-left-color:var(--bad); background:#2a1414; } .item.danger .name { color:#ffd7d7; }
 .chat-input { grid-template-columns:1fr auto auto; } button.listening { background:var(--bad); border-color:var(--bad); color:#210606; font-weight:700; }
+
+.way { margin:0 0 10px; padding:9px 12px; border-radius:10px; border:1px solid var(--line); border-left-width:5px; font-weight:600; }
+.way.level-ok { border-left-color:var(--ok); } .way.level-caution { border-left-color:var(--warn); background:#2a2412; } .way.level-stop { border-left-color:var(--bad); background:#2a1414; color:#ffd7d7; } .way.level-unsure { border-left-color:var(--muted); color:var(--muted); }

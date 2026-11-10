@@ -4,7 +4,8 @@ This is step one of "where can I walk": a wall, a floor and a passage are REGION
 a segmentation model, measure its speed and LOOK at its masks on your own videos:   scenelive bench-seg VIDEO
 
 Groups (everything the model knows is folded into these):
-  walkable  floor, road, sidewalk, path, carpet, grass, earth ...      wall     walls, buildings, fences, railings, columns
+  walkable  floor, sidewalk, path, carpet                              road     the carriageway (cars!), kept apart from the sidewalk
+  rough     grass, earth, sand, field                                  wall     walls, buildings, fences, railings, columns
   door      doors                                                      stairs   stairs, steps, escalators (a drop-off or a climb)
   glass     windows, mirrors (a person cannot tell glass from air)     dynamic  people, vehicles, animals (they move)
   obstacle  anything else that is not sky / ceiling                    ignore   sky, ceiling"""
@@ -14,13 +15,17 @@ import time
 import cv2
 import numpy as np
 
-IGNORE, WALK, WALL, DOOR, STAIRS, GLASS, DYNAMIC, OBSTACLE = range(8)
-GROUP_NAMES = ["ignore", "walkable", "wall", "door", "stairs", "glass", "dynamic", "obstacle"]
-GROUP_RU = ["не учитывается", "можно идти", "стена", "дверь", "лестница", "стекло", "движущееся", "препятствие"]
-GROUP_COLOR = {WALK: (60, 200, 60), WALL: (200, 120, 40), DOOR: (0, 165, 255), STAIRS: (0, 220, 255), GLASS: (255, 255, 0), DYNAMIC: (60, 60, 230), OBSTACLE: (200, 60, 200)}   # BGR
+IGNORE, WALK, ROAD, ROUGH, WALL, DOOR, STAIRS, GLASS, DYNAMIC, OBSTACLE = range(10)
+GROUP_NAMES = ["ignore", "walkable", "road", "rough", "wall", "door", "stairs", "glass", "dynamic", "obstacle"]
+GROUP_RU = ["не учитывается", "можно идти", "проезжая часть", "неровная земля", "стена", "дверь", "лестница", "стекло", "движущееся", "препятствие"]
+GROUP_COLOR = {WALK: (60, 200, 60), ROUGH: (60, 200, 190), ROAD: (20, 90, 160), WALL: (200, 120, 40), DOOR: (0, 140, 255), STAIRS: (0, 240, 255), GLASS: (255, 255, 0),
+               DYNAMIC: (60, 60, 230), OBSTACLE: (200, 60, 200)}   # BGR
 
+# Road and sidewalk are DIFFERENT for a person on foot: the first is where the cars are.
 _SETS = {
-    WALK: {"floor", "road", "sidewalk", "path", "earth", "grass", "rug", "field", "sand", "dirt track", "land", "runway"},
+    WALK: {"floor", "sidewalk", "path", "rug"},
+    ROAD: {"road", "runway"},
+    ROUGH: {"grass", "earth", "field", "sand", "dirt track", "land"},
     WALL: {"wall", "building", "house", "skyscraper", "fence", "railing", "bannister", "column", "tower", "hovel"},
     DOOR: {"door", "screen door"},
     STAIRS: {"stairs", "stairway", "step", "escalator"},
@@ -63,27 +68,35 @@ class SegFormerSegmenter:
     """SegFormer-B0 trained on ADE20K (150 classes). Needs `pip install transformers` (torch comes with ultralytics). The model downloads on first use.
     Check the licence of the weights before any commercial use."""
     name = "segformer-b0-ade20k"
-    def __init__(self, device: str | None = None, model_id: str = "nvidia/segformer-b0-finetuned-ade-512-512"):
+    def __init__(self, device: str | None = None, model_id: str = "nvidia/segformer-b0-finetuned-ade-512-512", size: int = 0):
         try:
             import torch
             from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
         except ImportError as ex:
             raise ImportError("the 'transformers' package is not installed: run  windows\\setup_seg.bat  (pip install transformers)") from ex
-        self.torch = torch; self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.size = size; self.last_conf = None; self.torch = torch; self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.proc = SegformerImageProcessor.from_pretrained(model_id); self.model = SegformerForSemanticSegmentation.from_pretrained(model_id).to(self.device).eval()
         self.id2label = {int(k): v for k, v in self.model.config.id2label.items()}
 
     def segment(self, frame_bgr: np.ndarray):
         """-> (label map, same size as the frame, ADE20K class ids; id2label)"""
-        inputs = self.proc(images=cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB), return_tensors="pt")
-        with self.torch.no_grad(): logits = self.model(pixel_values=inputs["pixel_values"].to(self.device)).logits
-        small = logits.argmax(1)[0].cpu().numpy().astype(np.uint8)                              # 1/4 of the input size: resize the answer, not the logits (cheaper)
-        return cv2.resize(small, (frame_bgr.shape[1], frame_bgr.shape[0]), interpolation=cv2.INTER_NEAREST).astype(np.int32), self.id2label
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        if self.size:                                                                           # aspect-preserving input (multiples of 32): fewer pixels than the default 512x512 square
+            h, w = rgb.shape[:2]; k = self.size / max(h, w); rgb = cv2.resize(rgb, (max(32, int(round(w * k / 32)) * 32), max(32, int(round(h * k / 32)) * 32)), interpolation=cv2.INTER_AREA)
+            inputs = self.proc(images=rgb, return_tensors="pt", do_resize=False)
+        else: inputs = self.proc(images=rgb, return_tensors="pt")
+        with self.torch.no_grad():
+            logits = self.model(pixel_values=inputs["pixel_values"].to(self.device)).logits
+            conf, lab = logits.softmax(1).max(1)
+        size = (frame_bgr.shape[1], frame_bgr.shape[0])                                         # the answer is 1/4 of the input size: resize the answer, not the logits (cheaper)
+        self.last_conf = cv2.resize((conf[0].cpu().numpy() * 255).astype(np.uint8), size, interpolation=cv2.INTER_LINEAR)          # how sure the model was, 0..255 per pixel
+        return cv2.resize(lab[0].cpu().numpy().astype(np.uint8), size, interpolation=cv2.INTER_NEAREST).astype(np.int32), self.id2label
 
 
 class ColorSegmenter:
     """Crude geometry and colour rules: demo and tests only (ceiling on top, wall in the middle, floor below; red = person, green = door)."""
     name = "colors"
+    last_conf = None
     id2label = {0: "wall", 1: "floor, flooring", 2: "door", 3: "ceiling", 4: "person, individual"}
     def segment(self, frame_bgr: np.ndarray):
         h, w = frame_bgr.shape[:2]; lab = np.zeros((h, w), np.int32); lab[: int(h * 0.2)] = 3; lab[int(h * 0.58):] = 1
@@ -92,9 +105,9 @@ class ColorSegmenter:
         return lab, self.id2label
 
 
-def make_segmenter(kind: str, device: str | None = None):
+def make_segmenter(kind: str, device: str | None = None, size: int = 0):
     if kind == "colors": return ColorSegmenter()
-    if kind == "segformer": return SegFormerSegmenter(device)
+    if kind == "segformer": return SegFormerSegmenter(device, size=size)
     raise ValueError(f"unknown segmenter {kind!r}: segformer or colors")
 
 

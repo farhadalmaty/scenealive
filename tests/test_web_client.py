@@ -72,6 +72,21 @@ class TestPureHelpers(unittest.TestCase):
         js = open(APP_JS, encoding="utf-8").read()
         for phrase in ("Связь с сервером потеряна. Не полагайтесь на подсказки.", "Подсказки не обновляются. Не полагайтесь на них.", "Связь с сервером восстановлена.", "Подсказки снова обновляются."): self.assertIn(phrase, js)
 
+    def test_camera_pitch_from_the_orientation_sensor(self):
+        out = node("const S=require(process.argv[1]); console.log(JSON.stringify([[90,0],[0,0],[180,0],[45,0],[75,0],[0,-90],[90,90]].map(a=>S.cameraPitch(...a))))")
+        for got, want in zip(out, [0, 90, -90, 45, 15, 0, 0]): self.assertAlmostEqual(got, want, delta=0.01)             # upright = horizon, flat face up = looking down
+
+    def test_free_floor_wedges_for_the_radar(self):
+        out = node("""const S=require(process.argv[1]); const sec=(lo,hi,d,cap)=>({lo:lo,hi:hi,free_safe_m:d,capped:!!cap,blocker:'wall'});
+          const ok={available:true,reliable:true,uncertain:false,sectors:[sec(-30,-10,1.0),sec(-10,10,2.0),sec(10,30,6.0),sec(30,40,9.6,true)]};
+          console.log(JSON.stringify({w:S.freeWedges(ok),a:S.freeWedges(null),b:S.freeWedges({available:false}),c:S.freeWedges(Object.assign({},ok,{reliable:false})),d:S.freeWedges(Object.assign({},ok,{uncertain:true}))}))""")
+        self.assertEqual([w["level"] for w in out["w"]], ["stop", "caution", "ok", "ok"]); self.assertEqual(out["w"][3]["r"], 135); self.assertLess(out["w"][0]["r"], out["w"][1]["r"]); self.assertLess(out["w"][1]["r"], out["w"][2]["r"])
+        self.assertEqual((out["a"], out["b"], out["c"], out["d"]), ([], [], [], []))                                       # never draw a floor we do not trust
+
+    def test_the_page_sends_the_tilt_and_shows_the_way(self):
+        js = open(APP_JS, encoding="utf-8").read(); html = open(os.path.join(os.path.dirname(APP_JS), "index.html"), encoding="utf-8").read()
+        self.assertIn("pitch: pitch", js); self.assertIn("renderWay(m.free_space)", js); self.assertIn('id="way"', html); self.assertIn('data-q="Куда идти?"', html)
+
     def test_texts(self):
         out = node("const S=require(process.argv[1]); console.log(JSON.stringify([S.rangeText('~5 m'),S.rangeText('10-15 m'),S.rangeText('15+ m'),S.rangeText('?'),S.clockText(3,false),S.clockText(12,false),S.nameRu('person'),S.nameRu('zebra')]))")
         self.assertEqual(out, ["около 5 м", "10–15 м", "дальше 15 м", "расстояние неизвестно", "справа (3 ч)", "прямо по курсу (12 ч)", "человек", "zebra"])

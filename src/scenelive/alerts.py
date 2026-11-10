@@ -27,7 +27,7 @@ class AlertEngine:
         head = "Осторожно! Опасность: " if level == "danger" else "Внимание: "
         return f"{head}{maybe}{ru}" + (f", {tail}" if tail else "") + "."
 
-    def update(self, view: list[dict], ground: dict | None, t: float) -> list[dict]:
+    def update(self, view: list[dict], ground: dict | None, t: float, free=None) -> list[dict]:
         cands = []                                                                           # (priority, distance, alert dict, key)
         for v in view:
             if v["status"] == "remembered" or v.get("age_s", 0) > 2.5: continue
@@ -43,6 +43,15 @@ class AlertEngine:
         c = (ground or {}).get("center")
         if c and c.get("bad"):
             cands.append((1, 0.0, {"level": "caution", "text": f"Внимание: впереди {c['ru']}, покрытие {c['quality_ru']}.", "name": "ground:" + c["surface"]}, ("ground", c["surface"])))
+        if free is not None and free.reliable and not free.uncertain:                          # free space: standing on the road, or about to walk into something
+            from .freespace import advise
+            if free.underfoot == "road":
+                cands.append((0, 0.0, {"level": "danger", "text": "Внимание! Похоже, вы на проезжей части.", "name": "road"}, ("road", "underfoot")))
+            else:
+                a = advise(free)
+                if a["level"] == "stop":
+                    centre = min((s for s in free.sectors if s.hi > -12 and s.lo < 12), key=lambda s: s.free_safe_m, default=None)
+                    cands.append((0, 0.0, {"level": "danger", "text": a["text"], "name": "stop"}, ("stop", centre.blocker if centre else "?")))
         out = []
         if t - self.last_any < self.min_gap_s: return out
         for prio, dist, alert, key in sorted(cands, key=lambda x: (x[0], x[1])):

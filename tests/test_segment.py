@@ -2,13 +2,14 @@ import contextlib, io, os, tempfile, unittest
 import numpy as np
 import helpers
 from scenelive.cli import main
-from scenelive.segment import (DOOR, DYNAMIC, GLASS, IGNORE, OBSTACLE, STAIRS, WALK, WALL, ColorSegmenter, SegFormerSegmenter, bench_segmenter, group_map, group_of, make_segmenter, overlay, stats)
+from scenelive.segment import (DOOR, DYNAMIC, GLASS, IGNORE, OBSTACLE, ROAD, ROUGH, STAIRS, WALK, WALL, ColorSegmenter, SegFormerSegmenter, bench_segmenter, group_map, group_of, make_segmenter, overlay, stats)
 from scenelive.synth import render_video
 
 
 class TestGroups(unittest.TestCase):
     def test_real_ade20k_label_strings(self):
-        want = {"floor, flooring": WALK, "rug, carpet, carpeting": WALK, "road, route": WALK, "sidewalk, pavement": WALK, "earth, ground": WALK, "grass": WALK,
+        want = {"floor, flooring": WALK, "rug, carpet, carpeting": WALK, "sidewalk, pavement": WALK, "path": WALK, "road, route": ROAD, "runway": ROAD,
+                "earth, ground": ROUGH, "grass": ROUGH, "sand": ROUGH, "field": ROUGH,
                 "wall": WALL, "building, edifice": WALL, "fence, fencing": WALL, "railing, rail": WALL, "column, pillar": WALL, "door, double door": DOOR, "screen door, screen": DOOR,
                 "stairs, steps": STAIRS, "stairway, staircase": STAIRS, "escalator, moving staircase, moving stairway": STAIRS, "windowpane, window": GLASS, "mirror": GLASS,
                 "person, individual, someone, somebody, mortal, soul": DYNAMIC, "car, auto, automobile, machine, motorcar": DYNAMIC, "animal, animate being, beast, brute, creature, fauna": DYNAMIC,
@@ -41,7 +42,7 @@ class TestBench(unittest.TestCase):
     def test_cli_bench_seg(self):
         d = tempfile.mkdtemp(); v = os.path.join(d, "v.mp4"); render_video(v, duration=4.0); buf = io.StringIO()
         with contextlib.redirect_stdout(buf): code = main(["bench-seg", v, "--model", "colors", "--frames", "4", "-o", os.path.join(d, "o")])
-        self.assertEqual(code, 0); self.assertIn("frames per second", buf.getvalue()); self.assertIn("green = can walk", buf.getvalue())
+        self.assertEqual(code, 0); self.assertIn("frames per second", buf.getvalue()); self.assertIn("brown = ROAD", buf.getvalue())
 
     def test_a_missing_transformers_package_is_explained(self):
         with self.assertRaises(ImportError) as c: SegFormerSegmenter()
@@ -49,6 +50,11 @@ class TestBench(unittest.TestCase):
         with contextlib.redirect_stdout(buf): code = main(["bench-seg", "x.mp4"])
         self.assertEqual(code, 2); self.assertIn("transformers", buf.getvalue()); self.assertNotIn("Traceback", buf.getvalue())
         with self.assertRaises(ValueError): make_segmenter("magic")
+
+    def test_the_road_is_not_the_sidewalk(self):
+        self.assertNotEqual(group_of("road, route"), group_of("sidewalk, pavement")); self.assertNotEqual(group_of("grass"), group_of("floor, flooring"))
+        from scenelive.segment import GROUP_COLOR, GROUP_NAMES
+        self.assertEqual(len(set(GROUP_COLOR.values())), len(GROUP_COLOR)); self.assertEqual(GROUP_NAMES[ROAD], "road")
 
     def test_a_missing_video_is_a_message(self):
         buf = io.StringIO()

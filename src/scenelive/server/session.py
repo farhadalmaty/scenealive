@@ -8,6 +8,7 @@ from ..camera import FOV_PRESETS, angdiff
 from ..compass import VisualCompass
 from ..config import CameraConfig, FastConfig, MapConfig
 from ..fastpath import FastPath
+from ..freespace import advise
 from ..mapper import build_map
 from ..objects import ObjectList
 from ..timing import Timer
@@ -36,8 +37,8 @@ def camera_from_hello(hello: dict) -> CameraConfig:
 
 
 class LiveSession:
-    def __init__(self, detector, hello: dict, cfg, fast_cfg: FastConfig | None = None, map_cfg: MapConfig | None = None, ground_classifier=None):
-        self.ground_classifier = ground_classifier; self.cfg = cfg; self.hello = hello; self.cam_cfg = camera_from_hello(hello)
+    def __init__(self, detector, hello: dict, cfg, fast_cfg: FastConfig | None = None, map_cfg: MapConfig | None = None, ground_classifier=None, segmenter=None, log=None):
+        self.ground_classifier = ground_classifier; self.segmenter = segmenter; self.log = log; self.cfg = cfg; self.hello = hello; self.cam_cfg = camera_from_hello(hello)
         self.fast_cfg = fast_cfg or FastConfig(imgsz=cfg.imgsz, conf=getattr(cfg, 'floor_conf', 0.15), start_conf=cfg.conf); self.map_cfg = map_cfg or MapConfig(interval_s=cfg.map_interval_s)
         self.detector = detector; self.lock = threading.RLock(); self.timer = Timer(); self.created = time.time()
         self.has_heading = bool(hello.get("has_heading")); self.reset()
@@ -50,7 +51,10 @@ class LiveSession:
             self.fast = FastPath(self.detector, self.cam_cfg, self.fast_cfg, self.compass, self.timer, gm)
             from ..alerts import AlertEngine
             self.alerts = AlertEngine(getattr(self.cfg, 'alert_cooldown_s', 15.0), getattr(self.cfg, 'alert_range_m', 6.0)) if getattr(self.cfg, 'alerts', True) else None
-            self.ground_state = None
+            self.ground_state = None; self.free_space = None; self.free_age = None; self.free_advice = None
+            from ..seg_monitor import SegMonitor
+            if getattr(self, 'seg', None) is not None: self.seg.close()
+            self.seg = SegMonitor(self.segmenter, getattr(self.cfg, 'camera_height_m', 1.4), getattr(self.cfg, 'seg_every_s', 1.0), getattr(self.cfg, 'seg_sync', False), log=self.log) if self.segmenter is not None else None
             self._prev_fast: set = set(); self.olist = ObjectList(); self.t = 0.0; self.heading = 0.0; self.frames = 0; self.next_map = self.map_cfg.interval_s
 
     # ------------------------------------------------------------------ frames
@@ -70,13 +74,22 @@ class LiveSession:
                 with self.timer.stage("map_build", tim):
                     self.olist.apply_map(build_map(self.fast.tracker.all_tracks(), t, self.map_cfg, self.fast_cfg), t)
                 self._forget(t); self.next_map = t + self.map_cfg.interval_s
-            view = self.view(); alerts = self.alerts.update(view, res.ground, t) if self.alerts is not None else []
+            free = None
+            if self.seg is not None:
+                if self.seg.due(t): self.seg.submit(frame, t, meta.get("pitch"), self.fast.camera(frame.shape[1], frame.shape[0]))
+                self.free_space, self.free_age = self.seg.state(t); self.free_advice = advise(self.free_space) if self.free_space is not None else None; free = self.free_space
+            view = self.view(); alerts = self.alerts.update(view, res.ground, t, free) if self.alerts is not None else []
         w, h = res.size
         boxes = [{"id": tr["id"], "name": tr["name"], "status": tr["status"], "conf": round(tr["conf"], 2), "x0": round(tr["box"][0] / w, 4),
                   "y0": round(tr["box"][1] / h, 4), "x1": round(tr["box"][2] / w, 4), "y1": round(tr["box"][3] / h, 4)} for tr in res.tracks]
         return {"type": "result", "seq": seq, "t": t, "heading": round(self.heading, 1), "entries": view, "boxes": boxes,
                 "timings_ms": {k: round(v * 1000.0, 2) for k, v in tim.items()}, "compute_ms": round(sum(tim.values()) * 1000.0, 1),
-                "n_det": len(res.detections), "size": [w, h], "ground": res.ground, "alerts": alerts}
+                "n_det": len(res.detections), "size": [w, h], "ground": res.ground, "alerts": alerts, "free_space": self._free_dict()}
+
+    def _free_dict(self):
+        if self.seg is None: return None
+        if self.free_space is None: return {"available": False, "advice": {"level": "unsure", "text": "Свободное пространство пока не определено."}}
+        d = self.free_space.to_dict(); d["available"] = True; d["age_s"] = None if self.free_age is None else round(self.free_age, 1); d["advice"] = self.free_advice; return d
 
     def view(self) -> list[dict]:
         with self.lock:
@@ -96,4 +109,5 @@ class LiveSession:
     def stats(self) -> dict:
         from ..sim import PHONE_STAGES, SERVER_STAGES, MAP_STAGES
         return {"frames": self.frames, "seconds": round(self.t, 1), "heading": round(self.heading, 1), "entries": len(self.olist.entries()),
-                "camera_fov_long_deg": self.cam_cfg.fov_long_deg, "compass": self.compass.name, "stages": self.timer.table(SERVER_STAGES + MAP_STAGES)}
+                "camera_fov_long_deg": self.cam_cfg.fov_long_deg, "compass": self.compass.name, "stages": self.timer.table(SERVER_STAGES + MAP_STAGES),
+                "seg": self.seg.stats() if self.seg is not None else None}

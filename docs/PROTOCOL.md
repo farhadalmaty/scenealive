@@ -7,7 +7,7 @@
 | Сообщение | Формат | Смысл |
 | --- | --- | --- |
 | `hello` | текст JSON: `{"type":"hello","camera":"main"\|"ultrawide"\|"tele","fov_long_deg":число (необязательно),"has_heading":true\|false}` | первое сообщение; `camera` задаёт угол обзора (69°, 100°, 38°), `fov_long_deg` (20–140) его заменяет; `has_heading` значит, что в кадрах будет курс датчика |
-| кадр | **бинарное**: `[uint32 big-endian N][N байт JSON meta][байты JPEG]`, meta: `{"seq":int,"t":секунды,"yaw":градусы или null,"w":int,"h":int}` | один кадр; `t` время съёмки от начала сеанса, `yaw` курс камеры в градусах по часовой стрелке (абсолютный или от произвольного нуля) |
+| кадр | **бинарное**: `[uint32 big-endian N][N байт JSON meta][байты JPEG]`, meta: `{"seq":int,"t":секунды,"yaw":градусы или null,"pitch":градусы или null,"w":int,"h":int}` | один кадр; `t` время съёмки от начала сеанса, `yaw` курс камеры в градусах по часовой стрелке (абсолютный или от произвольного нуля), `pitch` наклон камеры вниз от горизонта в градусах (положительный: смотрит вниз; нужен для расстояний до препятствий) |
 | `chat` | текст JSON: `{"type":"chat","id":"...","text":"..."}` | вопрос помощнику |
 | `reset` | `{"type":"reset"}` | новый маршрут: список и треки очищаются |
 | `ping` | `{"type":"ping","t":...}` | проверка связи, ответ `pong` |
@@ -18,8 +18,8 @@
 
 | Сообщение | Содержимое |
 | --- | --- |
-| `ready` | `session`, `detector`, `fov_long_deg`, `compass` (`client` или `visual`), `agent` (`claude` или `offline`), `agent_warning`, `map_interval_s`, `names_ru` (русские названия), `severity` (`danger`, `caution`, `info` по классам), `ground_enabled`, `alerts_enabled` |
-| `result` | на каждый обработанный кадр: `seq`, `t`, `heading` (градусы от начала), `entries` (список), `boxes` (рамки 0..1), `timings_ms` (по этапам), `compute_ms`, `n_det`, `size`, `dropped` (сколько старых кадров отброшено перед этим), `ground` (покрытие слева, впереди, справа: `surface`, `ru`, `quality`, `quality_ru`, `conf`, `bad`; `null`, если не включено), `alerts` (список предупреждений `{level, text, name, t}`, обычно пустой) |
+| `ready` | `session`, `detector`, `fov_long_deg`, `compass` (`client` или `visual`), `agent` (`claude` или `offline`), `agent_warning`, `map_interval_s`, `names_ru` (русские названия), `severity` (`danger`, `caution`, `info` по классам), `ground_enabled`, `seg_enabled`, `alerts_enabled` |
+| `result` | на каждый обработанный кадр: `seq`, `t`, `heading` (градусы от начала), `entries` (список), `boxes` (рамки 0..1), `timings_ms` (по этапам), `compute_ms`, `n_det`, `size`, `dropped` (сколько старых кадров отброшено перед этим), `ground` (покрытие слева, впереди, справа: `surface`, `ru`, `quality`, `quality_ru`, `conf`, `bad`; `null`, если не включено), `alerts` (список предупреждений `{level, text, name, t}`, обычно пустой; `name` бывает `stop` и `road` для предупреждений по полу), `free_space` (`null`, если сегментация выключена; иначе `available`, `sectors` с `lo`, `hi` (градусы от оси камеры), `free_m`, `free_safe_m`, `blocker`, `capped`; `underfoot` (`safe`, `rough`, `road`, `blocked`, `unknown`), `reliable`, `uncertain`, `reasons`, `age_s`, `advice` с `level` (`ok`, `caution`, `stop`, `unsure`) и `text`) |
 | `chat_reply` | `id`, `text`, `tools` (какие инструменты вызваны), `agent` |
 | `reset_done`, `pong` | подтверждения |
 | `error` | `message`, иногда `seq`; соединение остаётся живым (кроме «сервер занят») |

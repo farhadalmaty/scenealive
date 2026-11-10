@@ -9,6 +9,7 @@ import os
 import re
 from ..camera import angdiff
 from ..catalog import CATEGORY, CATEGORY_RU, NAMES, RU_NAME, SEVERITY, names_in_category, names_with_severity
+from ..freespace import advise, advise_goal, dist_words
 from ..labels import CANONICAL, COCO_STREET, STREET_VOCAB
 
 # Russian word stems -> canonical names. Stems shorter than 4 letters must match almost exactly ("кот" must not match "который"),
@@ -197,6 +198,26 @@ class LiveTools:
         return {"available": True, "zones": zones, "bad_zones": [z for z, v in g.items() if v["bad"]],
                 "note": "surface type is a guess from the picture: good / fair / bad quality; zones are left, center (straight ahead) and right of the ground in front of the camera"}
 
+    WAY_CAVEAT = "Камера может не заметить стекло, ступеньку вниз или яму."
+
+    def free_space(self) -> dict:
+        s = self.s
+        if getattr(s, "seg", None) is None: return {"available": False, "note": "free-space recognition is switched off on this server (start it with --seg segformer)"}
+        if s.free_space is None: return {"available": True, "known": False, "note": "no reliable picture of the floor yet"}
+        d = s.free_space.to_dict(); d.update(available=True, known=True, advice=s.free_advice); return d
+
+    def where_to_go(self, goal: str | None = None) -> dict:
+        """Which way to go. Without a goal: the direction with the most free floor. With a goal (door, bench ...): is the path to it free? Always approximate."""
+        fi = self.free_space()
+        if not fi.get("available"): return fi
+        if not fi.get("known"): return {"available": True, "level": "unsure", "text": "Я пока не вижу пол надёжно. Остановитесь и не полагайтесь на подсказки.", "caveat": self.WAY_CAVEAT}
+        fs = self.s.free_space
+        if not goal: return {"available": True, **advise(fs), "caveat": self.WAY_CAVEAT}
+        r = self.where_is(goal)
+        if not r["objects"]: return {"available": True, "found": False, "level": "ok", "text": f"{goal} сейчас в списке нет: не знаю, куда идти.", "known_names_now": r["known_names_now"]}
+        o = r["objects"][0]; a = advise_goal(fs, o["rel_az_deg"], name_ru(o["name"]), o["range_m"])
+        return {"available": True, "found": True, "goal": o["name"], **a, "caveat": self.WAY_CAVEAT}
+
     def hazards(self) -> dict:
         vs = [v for v in self._all() if v["status"] != "remembered"]
         danger = [v for v in vs if SEVERITY.get(v["name"]) == "danger"]; caution = [v for v in vs if SEVERITY.get(v["name"]) == "caution"]
@@ -215,6 +236,9 @@ TOOL_SCHEMAS = [
     {"name": "list_objects", "description": "List objects (nearest first). Optional filters by status (provisional, confirmed, remembered), by name, or by category (people, vehicle, animal, structure, indoor, nature, furniture, obstacle, hazard, weapon, trash, surface, danger).",
      "input_schema": {"type": "object", "properties": {"status": {"type": "string", "enum": ["provisional", "confirmed", "remembered"]}, "name": {"type": "string"},
                                                        "category": {"type": "string"}, "limit": {"type": "integer"}}}},
+    {"name": "where_to_go", "description": "Which way to go, from the free floor in front of the camera (sectors with how far the floor is free and what stops it: wall, person or vehicle, door, stairs, glass, road). Without a goal: the direction with the most free floor. With a goal (an object such as a door): whether the path to it is free. Approximate; always pass on its caveat.",
+     "input_schema": {"type": "object", "properties": {"goal": {"type": "string"}}}},
+    {"name": "free_space", "description": "Raw free-space picture: five sectors left to right with the free distance and the blocker, what is underfoot (safe floor, road, rough ground), and whether the picture is reliable. Use for 'where is the wall', 'how wide is the passage'.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "ground_info", "description": "The surface under the feet in three zones (left, center, right): asphalt, gravel, grass, ice, pothole ... and its quality (good, fair, bad). Use for questions about the road, the surface, a bad road.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "hazards", "description": "Dangerous or cautionary things right now: dangerous objects (knife, weapon, fire, open manhole, predators ...), close vehicles and obstacles, bad surface ahead. Use for 'is it safe', 'what is dangerous'.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "where_is", "description": "Where is an object of this kind (English name such as person, car, pole, door, wall, tree; Russian words also work)? Returns direction as a clock hour (12 = ahead, 3 = right, 9 = left, 6 = behind) and a distance estimate.",
@@ -237,12 +261,16 @@ Rules:
 - If a tool finds nothing, say so and mention what is known (known_names_now). Do not guess. If the list is empty, say the camera has not found anything yet.
 - Weapons, knives and other hazards are detected unreliably, in BOTH directions. Say 'возможно' for them. Never say that something is safe or that nothing dangerous is there; say only that the camera did not notice anything and that it must not be relied on.
 - Road and surface questions (road, asphalt, bad road, puddle, ice, pothole): use ground_info; surface type is a guess.
+- 'Which way to go', 'is the way free', 'where is the wall / the passage', 'take me to the door': use where_to_go or free_space and repeat only what they say, with their caveat. Distances there are rough and already reduced for safety. Never say the way is safe; if the level is 'unsure', say you cannot see the way reliably and the user must be careful.
 - Your answers may be read aloud: plain sentences only, no lists, no markdown, no emoji, no parentheses."""
 
 
 # --------------------------------------------------------------------------------------------------- agents
 GROUND_RE = re.compile(r"дорог|покрыт|асфальт|под ногами|тротуар|плитк|гравий|щебен|щебн|грунт|песок|песк|\bтрав|скольз|грязь|грязи|\bлуж|\bлёд|\bлед|снег|\bям[аыуо]|выбоин|ухаб|рельс|переход|зебр")
-HAZARD_RE = re.compile(r"опасн|угроз|осторожн|безопасн|что не так|можно ли идти")
+WAY_RE = re.compile(r"куда\s+(мне\s+)?(идти|пойти|повернуть|двигаться)|можно ли идти|свободен ли путь|свободно ли|где проход|есть ли проход|веди|как (мне )?(пройти|дойти|добраться|идти)")
+WALL_RE = re.compile(r"\bстен")
+GOAL_RE = re.compile(r"\bк\s|\bко\s|\bдо\s|веди|дойти|пройти|добраться")
+HAZARD_RE = re.compile(r"опасн|угроз|осторожн|безопасн|что не так")
 DISCLAIMER = "Это только подсказка камеры, на неё нельзя полагаться."
 CAT_GEN = {"animal": "животных", "trash": "мусора", "weapon": "оружия и острых предметов", "vehicle": "транспорта", "obstacle": "препятствий", "danger": "опасных предметов"}
 
@@ -283,12 +311,27 @@ class RuleAgent:
             parts.append("Осторожно, плохое покрытие " + ", ".join(ZONE_RU[z] for z in h["bad_ground"]) + ".")
         return " ".join(parts) if parts else "Камера не заметила явных опасностей. " + DISCLAIMER
 
+    def _walls_phrase(self, fi: dict) -> str:
+        groups = {"впереди": [], "слева": [], "справа": []}                                       # what is ahead first
+        for s in fi["sectors"]:
+            if s["blocker"] == "wall" and s["free_safe_m"] < 8.0: groups["слева" if (s["lo"] + s["hi"]) / 2 < -12 else "справа" if (s["lo"] + s["hi"]) / 2 > 12 else "впереди"].append(s["free_safe_m"])
+        parts = [f"{k} {dist_words(min(v))}" for k, v in groups.items() if v]
+        return ("Стена: " + ", ".join(parts) + ". " + LiveTools.WAY_CAVEAT) if parts else "Стен рядом не вижу. Это только подсказка камеры."
+
     # ---- the answer
     def reply(self, text: str) -> tuple[str, list[str]]:
         t = (text or "").lower(); names = resolve_names(t); used: list[str] = []; cats = categories_in(t)
         dirs = [(w, c) for w, c in DIRECTIONS if re.search(r"\b" + w, t)]
         if HAZARD_RE.search(t) and not (set(names) - set(names_with_severity("danger"))):
             used += ["hazards"]; return self._hazard_phrase(), used
+        if WAY_RE.search(t):
+            goal_names = sorted(n for n in names if CATEGORY.get(n) != "surface"); goal = goal_names[0] if (goal_names and GOAL_RE.search(t)) else None
+            used.append("where_to_go"); r = self.tools.where_to_go(goal)
+            if not r.get("available"): return "Распознавание свободного пространства на сервере не включено: запустите сервер с ключом --seg segformer.", used
+            return r["text"] + ("" if r.get("level") == "unsure" else " " + r.get("caveat", "")), used
+        if WALL_RE.search(t) and "wall" in names:
+            fi = self.tools.free_space()
+            if fi.get("available") and fi.get("known") and fi.get("reliable") and not fi.get("uncertain"): used.append("free_space"); return self._walls_phrase(fi), used
         if GROUND_RE.search(t):
             used.append("ground_info"); ans = self._ground_phrase(self.tools.ground_info()); obj = [n for n in names if CATEGORY.get(n) not in ("surface",)]
             if obj and re.search(r"\bям|\bлуж|\bлёд|\bлед|выбоин|ухаб", t):

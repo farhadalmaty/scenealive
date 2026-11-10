@@ -19,11 +19,11 @@ async def start(app: ServerApp, host: str, port: int, ssl_ctx=None):
     return await asyncio.start_server(app.handle, host, port, ssl=ssl_ctx, limit=65536)
 
 
-def run_server(cfg: ServerConfig, detector, ground_classifier=None) -> None:
+def run_server(cfg: ServerConfig, detector, ground_classifier=None, segmenter=None) -> None:
     """Blocking. Prints the addresses to open on the phone."""
     from .tls import lan_ips
     if cfg.token is None and cfg.host not in ("127.0.0.1", "localhost"): cfg.token = secrets.token_urlsafe(9)      # a LAN-visible camera server must not be open
-    app = ServerApp(cfg, detector, ground_classifier=ground_classifier); ctx = make_ssl_context(cfg); scheme = "https" if cfg.https else "http"
+    app = ServerApp(cfg, detector, ground_classifier=ground_classifier, segmenter=segmenter); ctx = make_ssl_context(cfg); scheme = "https" if cfg.https else "http"
 
     async def main():
         srv = await start(app, cfg.host, cfg.port, ctx)

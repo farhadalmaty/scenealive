@@ -14,6 +14,7 @@ def server_config(args):
     from .server.config import ServerConfig
     cfg = ServerConfig.from_env(host=args.host, port=args.port, cert_dir=args.cert_dir, detector=args.detector, weights=args.weights, device=args.device, imgsz=args.imgsz,
                                 conf=args.conf, floor_conf=getattr(args, "floor_conf", 0.15), map_interval_s=args.map_interval, max_sessions=args.max_sessions, agent=args.agent, model=args.model, token=args.token)
+    cfg.seg = getattr(args, "seg", "none"); cfg.seg_size = getattr(args, "seg_size", 0); cfg.seg_every_s = getattr(args, "seg_every", 1.0); cfg.camera_height_m = getattr(args, "camera_height", 1.4)
     cfg.https = not args.no_https; cfg.vocab = getattr(args, "vocab", "extended"); cfg.ground = getattr(args, "ground", "none")
     cfg.alerts = not getattr(args, "no_alerts", False); cfg.alert_range_m = getattr(args, "alert_range", 6.0)
     return cfg
@@ -121,6 +122,9 @@ def main(argv=None):
     sv.add_argument("--imgsz", type=int, default=640); sv.add_argument("--conf", type=float, default=0.30, help="a track may START at this confidence"); sv.add_argument("--floor-conf", type=float, default=0.15, help="weaker detections only keep a track alive"); sv.add_argument("--map-interval", type=float, default=1.0)
     sv.add_argument("--vocab", default="extended", help="detector vocabulary: core (28 words), extended (everything in the catalogue: road, trash, weapons, animals ...) or a text file with one word per line")
     sv.add_argument("--ground", choices=["none", "clip", "colors"], default="none", help="surface under the feet (road, asphalt, bad road); clip needs the CLIP package that YOLO-World installs")
+    sv.add_argument("--seg", choices=["none", "segformer", "colors"], default="none", help="floor / walls / road segmentation for 'where to go' (segformer needs transformers: windows\\setup_seg.bat)")
+    sv.add_argument("--seg-size", type=int, default=0, help="segmentation input, long side in pixels (448 is faster; 0 = model default)"); sv.add_argument("--seg-every", type=float, default=1.0, help="seconds between segmentations")
+    sv.add_argument("--camera-height", type=float, default=1.4, help="metres: height of the phone above the floor (distances to obstacles scale with it)")
     sv.add_argument("--no-alerts", action="store_true", help="switch off the spoken/visual warnings"); sv.add_argument("--alert-range", type=float, default=6.0, help="metres: close vehicles ahead are announced within this range")
     sv.add_argument("--max-sessions", type=int, default=2); sv.add_argument("--agent", choices=["auto", "claude", "offline"], default="auto", help="auto: Claude when ANTHROPIC_API_KEY is set")
     sv.add_argument("--model", default=None, help="Claude model for the chat agent (default claude-sonnet-5-5, or SCENELIVE_MODEL)")
@@ -132,7 +136,7 @@ def main(argv=None):
     cs.add_argument("--fast", action="store_true", help="do not wait in real time"); cs.add_argument("--max-seconds", type=float, default=None); cs.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=None)
     bs = sp.add_parser("bench-seg", help="measure a segmentation model (floor, walls, doors, stairs, glass) on your video and save overlay pictures to LOOK at")
     bs.add_argument("video"); bs.add_argument("--model", choices=["segformer", "colors"], default="segformer", help="segformer = SegFormer-B0 (needs transformers); colors = a crude demo")
-    bs.add_argument("--device", default=None); bs.add_argument("--frames", type=int, default=12); bs.add_argument("--long-side", type=int, default=640); bs.add_argument("-o", "--out", default=None)
+    bs.add_argument("--device", default=None); bs.add_argument("--size", type=int, default=0, help="model input: long side in pixels, aspect kept (e.g. 448 is faster); 0 = the model default 512x512, measured at 343 ms"); bs.add_argument("--frames", type=int, default=12); bs.add_argument("--long-side", type=int, default=640); bs.add_argument("-o", "--out", default=None)
     vc = sp.add_parser("vocab", help="show the catalogue of everything that can be named; write a vocabulary file to edit (--out)")
     vc.add_argument("--out", default=None, help="write the extended vocabulary to this text file (one word per line, grouped by category) and use it with --vocab file")
     vc.add_argument("--category", default=None, help="only this category (people, vehicle, animal, structure, indoor, nature, furniture, obstacle, hazard, weapon, trash, surface)")
@@ -149,11 +153,11 @@ def main(argv=None):
         from .segment import bench_segmenter, make_segmenter
         out = args.out or os.path.join("runs", "seg_" + _stamp())
         try:
-            seg = make_segmenter(args.model, args.device); print(f"model: {seg.name}; the first start downloads it", flush=True)
+            seg = make_segmenter(args.model, args.device, args.size); print(f"model: {seg.name}; the first start downloads it", flush=True)
             bench_segmenter(args.video, seg, out, args.frames, args.long_side)
         except ImportError as ex: print(f"Cannot run: {ex}"); return 2
         except (FileNotFoundError, ValueError) as ex: print(f"Cannot run: {ex}"); return 2
-        print(f"overlay pictures (green = can walk, blue = wall, orange = door, yellow = stairs, cyan = glass, red = moving, magenta = obstacle) are in {out}")
+        print(f"overlay pictures (green = sidewalk or floor, brown = ROAD, light green = grass or earth, blue = wall, orange = door, yellow = stairs, cyan = glass, red = moving, magenta = obstacle) are in {out}")
         return 0
     if args.cmd == "vocab":
         from .catalog import CATEGORY, CATEGORY_RU, ENTRIES, RU_NAME, SEVERITY
@@ -182,6 +186,8 @@ def main(argv=None):
             print(f"loading the detector '{cfg.detector}', vocabulary '{cfg.vocab}' ({len(vocab)} words) (the first start downloads the weights: it can take a few minutes) ...", flush=True)
             det = make_detector(cfg.detector, cfg.device, cfg.imgsz, cfg.floor_conf, cfg.weights, vocab)
             gr = make_ground(cfg.ground, cfg.device)
+            from .segment import make_segmenter
+            sg = make_segmenter(cfg.seg, cfg.device, cfg.seg_size) if cfg.seg != "none" else None
             try: det.detect(np.zeros((360, 640, 3), np.uint8))                      # warm-up: the first real frame must not pay for it
             except Exception: pass
             if cfg.https: make_ssl_context(cfg)                                    # fail early and clearly if https cannot be set up
@@ -189,8 +195,8 @@ def main(argv=None):
             print(f"Cannot start: {ex}"); return 2
         except ImportError as ex:
             print(f"A package is missing: {ex}\nInstall:  windows\\setup_server.bat   (cryptography for https) and  windows\\setup_models.bat  (ultralytics for the detector)"); return 2
-        print(f"agent: {agent_status(cfg)}", flush=True); print(f"surface recognition: {cfg.ground}   warnings: {'on' if cfg.alerts else 'off'}", flush=True)
-        run_server(cfg, det, gr); return 0
+        print(f"agent: {agent_status(cfg)}", flush=True); print(f"surface recognition: {cfg.ground}   free space / where to go: {cfg.seg}   warnings: {'on' if cfg.alerts else 'off'}", flush=True)
+        run_server(cfg, det, gr, sg); return 0
     if args.cmd == "client-sim":
         import asyncio
         from .server.client_sim import format_summary, run_client

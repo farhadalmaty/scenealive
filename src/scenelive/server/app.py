@@ -41,7 +41,7 @@ def unpack_frame(data: bytes) -> tuple[dict, bytes]:
     except (UnicodeDecodeError, json.JSONDecodeError): raise ValueError("meta is not valid JSON")
     if not isinstance(meta, dict): raise ValueError("meta must be an object")
     clean: dict = {}
-    for k, kind in (("seq", int), ("t", float), ("yaw", float)):
+    for k, kind in (("seq", int), ("t", float), ("yaw", float), ("pitch", float)):
         v = meta.get(k)
         if v is None: continue
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v): raise ValueError(f"meta.{k} must be a finite number")
@@ -50,8 +50,8 @@ def unpack_frame(data: bytes) -> tuple[dict, bytes]:
 
 
 class ServerApp:
-    def __init__(self, cfg: ServerConfig, detector, agent_client=None, log=None, ground_classifier=None):
-        self.cfg, self.detector, self.agent_client, self.ground_classifier = cfg, detector, agent_client, ground_classifier
+    def __init__(self, cfg: ServerConfig, detector, agent_client=None, log=None, ground_classifier=None, segmenter=None):
+        self.cfg, self.detector, self.agent_client, self.ground_classifier, self.segmenter = cfg, detector, agent_client, ground_classifier, segmenter
         self.log = log or (lambda *a: print(*a, file=sys.stderr, flush=True))
         self.sessions: dict[str, LiveSession] = {}; self.executor = ThreadPoolExecutor(max_workers=1); self.started = time.time()
         self.assets = {p: (open(os.path.join(WEB_DIR, f), "rb").read(), ct) for p, (f, ct) in ASSETS.items()}
@@ -150,13 +150,13 @@ class ServerApp:
                     if typ == "hello":
                         if session is not None: await send({"type": "error", "message": "hello was already sent"}); continue
                         if len(self.sessions) >= cfg.max_sessions: await send({"type": "error", "message": "the server is busy: too many live sessions"}); await ws.close(1013, "busy"); break
-                        session = LiveSession(self.detector, m, cfg, ground_classifier=self.ground_classifier); self.sessions[sid] = session; warning = None
+                        session = LiveSession(self.detector, m, cfg, ground_classifier=self.ground_classifier, segmenter=self.segmenter, log=self.log); self.sessions[sid] = session; warning = None
                         try: agent = make_agent(session, cfg, self.agent_client)
                         except Exception as ex: agent = RuleAgent(session); warning = f"Claude agent unavailable ({ex}); using the offline agent"
                         worker = asyncio.create_task(work())
                         await send({"type": "ready", "session": sid, "detector": getattr(self.detector, "name", "?"), "fov_long_deg": session.cam_cfg.fov_long_deg,
                                     "compass": session.compass.name, "agent": agent.kind, "agent_warning": warning, "map_interval_s": cfg.map_interval_s,
-                                    "names_ru": EN_RU, "severity": SEVERITY, "ground_enabled": self.ground_classifier is not None, "alerts_enabled": bool(cfg.alerts)})
+                                    "names_ru": EN_RU, "severity": SEVERITY, "ground_enabled": self.ground_classifier is not None, "seg_enabled": self.segmenter is not None, "alerts_enabled": bool(cfg.alerts)})
                     elif session is None: await send({"type": "error", "message": "send hello first"})
                     elif typ == "chat":
                         t = asyncio.create_task(chat(m)); tasks.add(t); t.add_done_callback(tasks.discard)
@@ -172,4 +172,5 @@ class ServerApp:
                     pending = (meta, jpeg); ev.set()
         finally:
             for t in list(tasks) + ([worker] if worker else []): t.cancel()
+            if session is not None and getattr(session, 'seg', None) is not None: session.seg.close()
             self.sessions.pop(sid, None)
