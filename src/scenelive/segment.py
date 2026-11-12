@@ -49,6 +49,37 @@ def group_map(labels: np.ndarray, id2label: dict[int, str]) -> np.ndarray:
     return lut[labels]
 
 
+def _islands(g: np.ndarray, label: int, min_area: float, walk: np.ndarray, to_walk: bool) -> None:
+    """Small components of `label`: relabel them from their surroundings (in place)."""
+    n, lab, st, _ = cv2.connectedComponentsWithStats((g == label).astype(np.uint8), connectivity=8)
+    k = np.ones((5, 5), np.uint8)
+    for i in range(1, n):
+        if st[i, cv2.CC_STAT_AREA] >= min_area: continue
+        x, y, w, h = st[i, :4]; x0, y0, x1, y1 = max(0, x - 3), max(0, y - 3), min(g.shape[1], x + w + 3), min(g.shape[0], y + h + 3)
+        comp = lab[y0:y1, x0:x1] == i; ring = (cv2.dilate(comp.astype(np.uint8), k) > 0) & ~comp; around = g[y0:y1, x0:x1][ring]
+        if around.size == 0: continue
+        if to_walk:
+            if walk[y0:y1, x0:x1][ring].mean() > 0.7: g[y0:y1, x0:x1][comp] = WALK                # a drain cover or shadow inside the sidewalk
+        elif walk[y0:y1, x0:x1][ring].mean() < 0.3: g[y0:y1, x0:x1][comp] = int(np.bincount(around).argmax())   # a 'floor' blob inside a car
+
+
+def clean_groups(g: np.ndarray, thin_px: int = 5, island_frac: float = 0.003) -> np.ndarray:
+    """Remove what the street pictures showed as noise:
+      - thin 'walkable' strips next to the road (painted lines) become road;
+      - small 'road' patches surrounded by sidewalk (drain covers, shadows) become sidewalk;
+      - small 'walkable' patches surrounded by something else (blocks on a car) take the label around them."""
+    g = g.astype(np.uint8).copy(); H, W = g.shape; min_area = island_frac * H * W
+    walk = ((g == WALK) | (g == ROUGH)).astype(np.uint8)
+    opened = cv2.morphologyEx(walk, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (thin_px, thin_px)))
+    near_road = cv2.dilate((g == ROAD).astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+    g[(walk > 0) & (opened == 0) & near_road] = ROAD
+    walk = (g == WALK) | (g == ROUGH)
+    _islands(g, ROAD, min_area, walk, to_walk=True)
+    walk = (g == WALK) | (g == ROUGH)
+    _islands(g, WALK, min_area, walk, to_walk=False)
+    return g
+
+
 def stats(gmap: np.ndarray) -> dict[str, float]:
     n = gmap.size; return {GROUP_NAMES[g]: float((gmap == g).sum()) / n for g in range(len(GROUP_NAMES))}
 
@@ -74,7 +105,8 @@ class SegFormerSegmenter:
             from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
         except ImportError as ex:
             raise ImportError("the 'transformers' package is not installed: run  windows\\setup_seg.bat  (pip install transformers)") from ex
-        self.size = size; self.last_conf = None; self.torch = torch; self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        from .device import configure, pick_device
+        self.size = size; self.last_conf = None; self.torch = torch; self.device = pick_device(device); configure(self.device)
         self.proc = SegformerImageProcessor.from_pretrained(model_id); self.model = SegformerForSemanticSegmentation.from_pretrained(model_id).to(self.device).eval()
         self.id2label = {int(k): v for k, v in self.model.config.id2label.items()}
 
@@ -111,7 +143,7 @@ def make_segmenter(kind: str, device: str | None = None, size: int = 0):
     raise ValueError(f"unknown segmenter {kind!r}: segformer or colors")
 
 
-def bench_segmenter(video: str, seg, out_dir: str, n_frames: int = 12, long_side: int = 640, warmup: int = 1, log=print) -> dict:
+def bench_segmenter(video: str, seg, out_dir: str, n_frames: int = 12, long_side: int = 640, warmup: int = 1, log=print, clean: bool = True) -> dict:
     """Time the segmenter on frames spread over the video and save an overlay picture of each (floor green, walls blue, doors orange ...)."""
     from .video_io import open_video
     rd = open_video(video); total = int(rd.get(cv2.CAP_PROP_FRAME_COUNT) or 0); step = max(1, total // max(n_frames, 1)) if total else 5; frames = []; i = 0
@@ -128,7 +160,7 @@ def bench_segmenter(video: str, seg, out_dir: str, n_frames: int = 12, long_side
     ms, rows = [], []
     for k, fr in enumerate(frames):
         t0 = time.perf_counter(); labels, id2 = seg.segment(fr); ms.append((time.perf_counter() - t0) * 1000.0)
-        g = group_map(labels, id2); st = stats(g); rows.append(st)
+        g = group_map(labels, id2); g = clean_groups(g) if clean else g; st = stats(g); rows.append(st)
         ok, buf = cv2.imencode(".jpg", overlay(fr, g), [cv2.IMWRITE_JPEG_QUALITY, 88]); buf.tofile(os.path.join(out_dir, f"seg_{k:03d}.jpg"))
     a = np.array(ms); summary = {"model": getattr(seg, "name", "?"), "frames": len(frames), "size": f"{frames[0].shape[1]}x{frames[0].shape[0]}", "mean_ms": float(a.mean()),
                                  "p50_ms": float(np.percentile(a, 50)), "p95_ms": float(np.percentile(a, 95)), "fps": float(1000.0 / a.mean()),

@@ -12,7 +12,7 @@ class ServerConfig:
     token: str | None = None            # required as ?token=... for the WebSocket and /api/stats when set
     detector: str = "world"             # world | yolo | blobs
     weights: str | None = None
-    device: str | None = None
+    device: str | None = "auto"        # auto: the graphics card if PyTorch sees one, otherwise the processor
     imgsz: int = 640
     conf: float = 0.30                  # a track may START at this confidence
     floor_conf: float = 0.15            # weaker detections may only continue a track
@@ -27,6 +27,10 @@ class ServerConfig:
     seg_every_s: float = 1.0
     seg_sync: bool = False              # tests only: run the model inline instead of in a thread
     camera_height_m: float = 1.4        # a hand-held phone; the distances to obstacles scale with it
+    ocr: str = "none"                   # reading text (bus numbers, signs): none | easyocr
+    ocr_langs: str = "ru,en"
+    ocr_every_s: float = 1.0
+    ocr_sync: bool = False              # tests only
     alerts: bool = True                 # spoken/visual warnings about danger, close vehicles, bad surface
     alert_cooldown_s: float = 15.0
     alert_range_m: float = 6.0

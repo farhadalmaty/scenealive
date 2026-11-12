@@ -78,11 +78,11 @@ class TestAdvice(unittest.TestCase):
         a = self.adv(floor(wall_forward=1.3)); self.assertEqual(a["level"], "stop"); self.assertTrue(a["text"].startswith("Стоп. Впереди стена")); self.assertIn("метр", a["text"])
 
     def test_something_at_the_feet_is_a_stop(self):
-        g = floor(); g[int(CAM.height * 0.92):] = DYNAMIC; a = self.adv(g); self.assertEqual(a["level"], "stop"); self.assertIn("человек или транспорт", a["text"]); self.assertEqual(a["ahead_m"], 0.0)
+        g = floor(); g[int(CAM.height * 0.92):] = DYNAMIC; a = self.adv(g); self.assertEqual(a["level"], "stop"); self.assertIn("препятствие, возможно человек или машина", a["text"]); self.assertEqual(a["ahead_m"], 0.0)
 
     def test_it_points_to_the_free_side(self):
         a = self.adv(floor(wall_forward=2.0, blocker=DYNAMIC, left_only=True)); self.assertEqual(a["level"], "caution")
-        self.assertIn("Осторожно, впереди человек или транспорт", a["text"]); self.assertIn("Свободнее справа", a["text"]); self.assertIn("Поверните направо примерно на", a["text"]); self.assertGreater(a["turn_deg"], 0)
+        self.assertIn("Осторожно, впереди препятствие, возможно человек или машина", a["text"]); self.assertIn("Свободнее справа", a["text"]); self.assertIn("Поверните направо примерно на", a["text"]); self.assertGreater(a["turn_deg"], 0)
         b = floor(); v = int(math.floor(row_for_forward(2.0, CAM, PITCH, H_CAM))); b[:v, CAM.width // 2:] = DYNAMIC; c = self.adv(b)
         self.assertIn("Свободнее слева", c["text"]); self.assertIn("налево", c["text"]); self.assertLess(c["turn_deg"], 0)
 
@@ -91,7 +91,8 @@ class TestAdvice(unittest.TestCase):
 
     def test_the_road_is_not_a_way_to_walk(self):
         a = self.adv(floor(wall_forward=5.0, blocker=ROAD)); self.assertIn("дальше проезжая часть", a["text"])
-        g = floor(fill=ROAD); b = self.adv(g); self.assertIn("Похоже, вы на проезжей части", b["text"]); self.assertIn("Остановитесь", b["text"]); self.assertEqual(b["level"], "stop")
+        g = floor(fill=ROAD); b = self.adv(g); self.assertIn("Похоже, вы на проезжей части", b["text"]); self.assertIn("тротуара в кадре не вижу", b["text"]); self.assertEqual(b["level"], "caution")
+        self.assertNotIn("Остановитесь", b["text"])                                                                         # stopping in the middle of a road is the worse advice
         close = self.adv(floor(wall_forward=1.5, blocker=ROAD)); self.assertIn("проезжая часть", close["text"]); self.assertEqual(close["level"], "stop")                    # the kerb ahead
 
     def test_stairs_and_glass_are_named(self):
@@ -106,12 +107,36 @@ class TestAdvice(unittest.TestCase):
             t = self.adv(g)["text"].lower(); self.assertNotIn("безопасно", t); self.assertNotIn("путь свободен", t)
 
 
+class TestRoad(unittest.TestCase):
+    def road_with_sidewalk_on(self, side):
+        g = floor(fill=ROAD); w = CAM.width
+        if side == "right": g[int(CAM.height * 0.6):, int(w * 0.75):] = WALK
+        else: g[int(CAM.height * 0.6):, : int(w * 0.25)] = WALK
+        return analyse(g, CAM, PITCH, H_CAM)
+
+    def test_on_the_road_it_points_to_the_nearest_sidewalk(self):
+        fs = self.road_with_sidewalk_on("right"); self.assertEqual(fs.underfoot, "road"); self.assertIsNotNone(fs.sidewalk); self.assertGreater(fs.sidewalk[0], 0)
+        a = advise(fs); self.assertTrue(a["text"].startswith("Похоже, вы на проезжей части. Ближайший тротуар справа"), a["text"]); self.assertGreater(a["turn_deg"], 0); self.assertEqual(a["level"], "caution")
+        b = advise(self.road_with_sidewalk_on("left")); self.assertIn("тротуар слева", b["text"]); self.assertLess(b["turn_deg"], 0)
+        self.assertEqual(json.loads(json.dumps(fs.to_dict()))["sidewalk"]["az"] > 0, True)
+
+    def test_on_the_sidewalk_there_is_no_sidewalk_search(self):
+        self.assertIsNone(analyse(floor(), CAM, PITCH, H_CAM).sidewalk)
+
+    def test_while_crossing_the_road_is_the_way_and_obstacles_are_still_reported(self):
+        g = floor(fill=ROAD); fs = analyse(g, CAM, PITCH, H_CAM)
+        a = advise(fs, crossing=True); self.assertTrue(a["text"].startswith("Режим перехода. Прямо свободно"), a["text"]); self.assertNotIn("проезжей части", a["text"])
+        v = int(math.floor(row_for_forward(1.4, CAM, PITCH, H_CAM))); g2 = g.copy(); g2[:v] = DYNAMIC
+        b = advise(analyse(g2, CAM, PITCH, H_CAM), crossing=True); self.assertEqual(b["level"], "stop"); self.assertIn("возможно человек или машина", b["text"])
+        self.assertEqual(advise(analyse(g, CAM, None, H_CAM), crossing=True)["text"], UNSURE)                                            # unsure stays unsure
+
+
 class TestGoal(unittest.TestCase):
     def test_a_free_path_to_a_known_object(self):
-        fs = analyse(floor(wall_forward=9.0), CAM, PITCH, H_CAM); a = advise_goal(fs, 8.0, "дверь", 4.0); self.assertEqual(a["level"], "ok"); self.assertIn("Путь к ней выглядит свободным", a["text"]); self.assertTrue(a["text"].startswith("Дверь"))
+        fs = analyse(floor(wall_forward=9.0), CAM, PITCH, H_CAM); a = advise_goal(fs, 8.0, "дверь", 4.0); self.assertEqual(a["level"], "ok"); self.assertIn("Путь выглядит свободным", a["text"]); self.assertTrue(a["text"].startswith("Дверь"))
 
     def test_a_blocked_path_names_the_blocker(self):
-        fs = analyse(floor(wall_forward=2.0, blocker=DYNAMIC), CAM, PITCH, H_CAM); a = advise_goal(fs, 0.0, "дверь", 6.0); self.assertEqual(a["level"], "caution"); self.assertIn("На пути к дверь человек или транспорт", a["text"])
+        fs = analyse(floor(wall_forward=2.0, blocker=DYNAMIC), CAM, PITCH, H_CAM); a = advise_goal(fs, 0.0, "дверь", 6.0); self.assertEqual(a["level"], "caution"); self.assertIn("Дверь: путь перекрыт, впереди препятствие, возможно человек или машина", a["text"])
 
     def test_a_goal_outside_the_picture_means_turn_first(self):
         fs = analyse(floor(), CAM, PITCH, H_CAM); a = advise_goal(fs, 80.0, "дверь"); self.assertIn("вне поля зрения", a["text"]); self.assertIn("направо примерно на 80 градусов", a["text"]); self.assertIn("слева", advise_goal(fs, -90.0, "дверь")["text"])

@@ -37,8 +37,8 @@ def camera_from_hello(hello: dict) -> CameraConfig:
 
 
 class LiveSession:
-    def __init__(self, detector, hello: dict, cfg, fast_cfg: FastConfig | None = None, map_cfg: MapConfig | None = None, ground_classifier=None, segmenter=None, log=None):
-        self.ground_classifier = ground_classifier; self.segmenter = segmenter; self.log = log; self.cfg = cfg; self.hello = hello; self.cam_cfg = camera_from_hello(hello)
+    def __init__(self, detector, hello: dict, cfg, fast_cfg: FastConfig | None = None, map_cfg: MapConfig | None = None, ground_classifier=None, segmenter=None, log=None, ocr_engine=None):
+        self.ocr_engine = ocr_engine; self.ground_classifier = ground_classifier; self.segmenter = segmenter; self.log = log; self.cfg = cfg; self.hello = hello; self.cam_cfg = camera_from_hello(hello)
         self.fast_cfg = fast_cfg or FastConfig(imgsz=cfg.imgsz, conf=getattr(cfg, 'floor_conf', 0.15), start_conf=cfg.conf); self.map_cfg = map_cfg or MapConfig(interval_s=cfg.map_interval_s)
         self.detector = detector; self.lock = threading.RLock(); self.timer = Timer(); self.created = time.time()
         self.has_heading = bool(hello.get("has_heading")); self.reset()
@@ -51,7 +51,10 @@ class LiveSession:
             self.fast = FastPath(self.detector, self.cam_cfg, self.fast_cfg, self.compass, self.timer, gm)
             from ..alerts import AlertEngine
             self.alerts = AlertEngine(getattr(self.cfg, 'alert_cooldown_s', 15.0), getattr(self.cfg, 'alert_range_m', 6.0)) if getattr(self.cfg, 'alerts', True) else None
-            self.ground_state = None; self.free_space = None; self.free_age = None; self.free_advice = None
+            from ..ocr import TextReader
+            self.reader = TextReader(self.ocr_engine, getattr(self.cfg, 'ocr_every_s', 1.0), getattr(self.cfg, 'ocr_sync', False), log=self.log) if self.ocr_engine is not None else None
+            self.last_frame = None
+            self.crossing_until = -1e9; self.ground_state = None; self.free_space = None; self.free_age = None; self.free_advice = None
             from ..seg_monitor import SegMonitor
             if getattr(self, 'seg', None) is not None: self.seg.close()
             self.seg = SegMonitor(self.segmenter, getattr(self.cfg, 'camera_height_m', 1.4), getattr(self.cfg, 'seg_every_s', 1.0), getattr(self.cfg, 'seg_sync', False), log=self.log) if self.segmenter is not None else None
@@ -68,6 +71,8 @@ class LiveSession:
             if isinstance(self.compass, ClientCompass): self.compass.set(meta.get("yaw"))
             res = self.fast.process(frame, t, seq); tim.update(res.timings)
             if res.ground is not None: self.ground_state = res.ground
+            self.last_frame = frame
+            if self.reader is not None: self.reader.consider(frame, t, res.tracks, res.size, lambda tr: tr["world_az"])     # only buses (and signs) are read, only inside their boxes
             self.olist.apply_fast(res.entries, t); self.heading = res.yaw; self.t = max(self.t, t); self.frames += 1
             now_keys = set(self.olist.fast); vanished = self._prev_fast - now_keys; self._prev_fast = now_keys
             if vanished or t >= self.next_map:                  # the moment an object leaves the live list it must already be in the map: no gap of amnesia
@@ -77,8 +82,8 @@ class LiveSession:
             free = None
             if self.seg is not None:
                 if self.seg.due(t): self.seg.submit(frame, t, meta.get("pitch"), self.fast.camera(frame.shape[1], frame.shape[0]))
-                self.free_space, self.free_age = self.seg.state(t); self.free_advice = advise(self.free_space) if self.free_space is not None else None; free = self.free_space
-            view = self.view(); alerts = self.alerts.update(view, res.ground, t, free) if self.alerts is not None else []
+                self.free_space, self.free_age = self.seg.state(t); self.free_advice = advise(self.free_space, self.crossing()) if self.free_space is not None else None; free = self.free_space
+            view = self.view(); alerts = self.alerts.update(view, res.ground, t, free, self.crossing()) if self.alerts is not None else []
         w, h = res.size
         boxes = [{"id": tr["id"], "name": tr["name"], "status": tr["status"], "conf": round(tr["conf"], 2), "x0": round(tr["box"][0] / w, 4),
                   "y0": round(tr["box"][1] / h, 4), "x1": round(tr["box"][2] / w, 4), "y1": round(tr["box"][3] / h, 4)} for tr in res.tracks]
@@ -86,15 +91,28 @@ class LiveSession:
                 "timings_ms": {k: round(v * 1000.0, 2) for k, v in tim.items()}, "compute_ms": round(sum(tim.values()) * 1000.0, 1),
                 "n_det": len(res.detections), "size": [w, h], "ground": res.ground, "alerts": alerts, "free_space": self._free_dict()}
 
+    CROSSING_S = 90.0
+
+    def crossing(self) -> bool:
+        """The user said they are crossing a road: the road is the way for a while (it switches itself off)."""
+        return self.t < self.crossing_until
+
+    def set_crossing(self, on: bool, seconds: float | None = None) -> None:
+        with self.lock: self.crossing_until = self.t + (seconds or self.CROSSING_S) if on else -1e9
+
     def _free_dict(self):
         if self.seg is None: return None
         if self.free_space is None: return {"available": False, "advice": {"level": "unsure", "text": "Свободное пространство пока не определено."}}
-        d = self.free_space.to_dict(); d["available"] = True; d["age_s"] = None if self.free_age is None else round(self.free_age, 1); d["advice"] = self.free_advice; return d
+        d = self.free_space.to_dict(); d["crossing"] = self.crossing(); d["available"] = True; d["age_s"] = None if self.free_age is None else round(self.free_age, 1); d["advice"] = self.free_advice; return d
 
     def view(self) -> list[dict]:
         with self.lock:
             out = self.olist.view(self.heading)
             for v in out:
+                ids = v.pop("track_ids", [])
+                if self.reader is not None:
+                    reads = [r for r in (self.reader.reading(i) for i in ids) if r]
+                    if reads: v["text"], v["text_reads"] = max(reads, key=lambda r: r[1])
                 v["age_s"] = round(max(0.0, self.t - v["last_t"]), 1)
                 if v["status"] == "confirmed" and v["source"] == "map" and self.t - v["last_t"] > self.map_cfg.remembered_after_s:
                     v["status"] = "remembered"             # decided NOW, not at the last map run: out of view means out of view
@@ -110,4 +128,4 @@ class LiveSession:
         from ..sim import PHONE_STAGES, SERVER_STAGES, MAP_STAGES
         return {"frames": self.frames, "seconds": round(self.t, 1), "heading": round(self.heading, 1), "entries": len(self.olist.entries()),
                 "camera_fov_long_deg": self.cam_cfg.fov_long_deg, "compass": self.compass.name, "stages": self.timer.table(SERVER_STAGES + MAP_STAGES),
-                "seg": self.seg.stats() if self.seg is not None else None}
+                "seg": self.seg.stats() if self.seg is not None else None, "ocr": self.reader.stats() if self.reader is not None else None}

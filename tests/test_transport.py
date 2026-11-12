@@ -132,7 +132,7 @@ class TestSessionOverTheWire(Base):
         async def go():
             ws = await ws_connect("127.0.0.1", self.port, "/ws"); await ws.send_text(json.dumps({"type": "hello"})); m = json.loads((await ws.recv())[1]); await ws.close(); return m
         m = asyncio.run(go()); self.assertEqual(m["names_ru"]["knife"], "нож"); self.assertEqual(m["names_ru"]["person"], "человек"); self.assertEqual(m["severity"]["knife"], "danger")
-        self.assertEqual((m["ground_enabled"], m["alerts_enabled"]), (False, True))
+        self.assertEqual((m["ground_enabled"], m["alerts_enabled"], m["ocr_enabled"], m["seg_enabled"]), (False, True, False, False))
 
     def test_a_whole_walk_with_the_phone_simulator(self):
         s = asyncio.run(run_client(f"http://127.0.0.1:{self.port}/", self.video, fps=3.0, pace=False, questions=["Что вокруг?", "Где человек?"]))

@@ -26,7 +26,7 @@ class Entry:
         return {"key": self.key, "name": self.name, "conf": round(self.conf, 2), "status": self.status, "world_az_deg": round(self.world_az, 1), "rel_az_deg": round(rel, 1),
                 "clock": hour, "behind": behind, "range_m": None if self.range_m is None else round(self.range_m, 1),
                 "range": range_label(self.range_m, self.range_sigma), "source": self.source, "n_obs": self.n_obs,
-                "first_t": round(self.first_t, 2), "last_t": round(self.last_t, 2), "moving": self.moving}
+                "first_t": round(self.first_t, 2), "last_t": round(self.last_t, 2), "moving": self.moving, "track_ids": list(self.track_ids)}
 
 
 @dataclass

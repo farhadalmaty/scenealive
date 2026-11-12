@@ -17,7 +17,7 @@ def free_port():
 class Args:
     def __init__(self, **kw):
         self.__dict__.update(dict(host="0.0.0.0", port=8443, no_https=False, cert_dir="certs", token=None, detector="world", weights=None, device=None, imgsz=640, conf=0.3,
-                                  map_interval=6.0, max_sessions=2, agent="auto", model=None, vocab="extended", ground="none", no_alerts=False, alert_range=6.0, seg="none", seg_size=0, seg_every=1.0, camera_height=1.4)); self.__dict__.update(kw)
+                                  map_interval=6.0, max_sessions=2, agent="auto", model=None, vocab="extended", ground="none", no_alerts=False, alert_range=6.0, seg="none", seg_size=0, seg_every=1.0, camera_height=1.4, ocr="none", ocr_langs="ru,en")); self.__dict__.update(kw)
 
 
 class TestConfig(unittest.TestCase):
@@ -29,6 +29,9 @@ class TestConfig(unittest.TestCase):
     def test_vocabulary_ground_and_alert_flags(self):
         c = server_config(Args(vocab="core", ground="clip", no_alerts=True, alert_range=9.0)); self.assertEqual((c.vocab, c.ground, c.alerts, c.alert_range_m), ("core", "clip", False, 9.0))
         d = server_config(Args()); self.assertEqual((d.vocab, d.ground, d.alerts, d.alert_range_m), ("extended", "none", True, 6.0))
+
+    def test_ocr_flags(self):
+        c = server_config(Args(ocr="easyocr", ocr_langs="ru,en,kk")); self.assertEqual((c.ocr, c.ocr_langs), ("easyocr", "ru,en,kk")); self.assertEqual(server_config(Args()).ocr, "none")
 
     def test_segmentation_flags(self):
         c = server_config(Args(seg="segformer", seg_size=448, seg_every=0.5, camera_height=1.2)); self.assertEqual((c.seg, c.seg_size, c.seg_every_s, c.camera_height_m), ("segformer", 448, 0.5, 1.2))

@@ -36,7 +36,8 @@ class ClipSurfaceClassifier:
     name = "clip"
     def __init__(self, device: str | None = None, model: str = "ViT-B/32", topk: int = 3):
         import torch
-        self.torch, self.topk = torch, topk; self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        from .device import pick_device
+        self.torch, self.topk = torch, topk; self.device = pick_device(device)
         try:
             import clip
             self.model, self.preprocess = clip.load(model, device=self.device); self.tokenize = clip.tokenize

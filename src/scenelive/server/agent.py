@@ -8,6 +8,7 @@ import json
 import os
 import re
 from ..camera import angdiff
+from ..camera import angdiff as _ad  # noqa: F401
 from ..catalog import CATEGORY, CATEGORY_RU, NAMES, RU_NAME, SEVERITY, names_in_category, names_with_severity
 from ..freespace import advise, advise_goal, dist_words
 from ..labels import CANONICAL, COCO_STREET, STREET_VOCAB
@@ -218,6 +219,45 @@ class LiveTools:
         o = r["objects"][0]; a = advise_goal(fs, o["rel_az_deg"], name_ru(o["name"]), o["range_m"])
         return {"available": True, "found": True, "goal": o["name"], **a, "caveat": self.WAY_CAVEAT}
 
+    OCR_OFF = {"available": False, "note": "text reading is switched off on this server (start it with --ocr easyocr)"}
+
+    def _clock_of(self, world_az):
+        if world_az is None: return None
+        from ..camera import clock
+        h, behind = clock(angdiff(world_az, self.s.heading)); return {"clock": h, "behind": behind}
+
+    def read_text(self) -> dict:
+        """Read what is written in the current picture (on request)."""
+        s = self.s
+        if getattr(s, "reader", None) is None: return self.OCR_OFF
+        fr = s.last_frame
+        if fr is None: return {"available": True, "texts": [], "note": "no picture yet"}
+        from ..camera import Camera
+        cam = Camera(fr.shape[1], fr.shape[0], s.cam_cfg.fov_long_deg); heading = s.heading
+        res = s.reader.read_now(fr, s.t, lambda x: (heading + cam.azimuth_deg(x)) % 360.0)
+        return {"available": True, "texts": [{"text": tx, "conf": round(c, 2), **(self._clock_of(az) or {})} for tx, c, az in res],
+                "note": "text read from the picture can be wrong; say 'possibly' for anything important"}
+
+    def list_texts(self, limit: int = 10) -> dict:
+        """Everything read so far (signs, shop names, bus numbers), newest first."""
+        s = self.s
+        if getattr(s, "reader", None) is None: return self.OCR_OFF
+        items = s.reader.texts.recent(max(1, min(int(limit), 40)))
+        return {"available": True, "count": len(s.reader.texts.items), "texts": [{"text": i.text, "kind": i.kind, "on": i.source, "times_read": i.count, "conf": round(i.conf, 2),
+                "age_s": round(max(0.0, s.t - i.last_t), 1), **(self._clock_of(i.world_az) or {})} for i in items]}
+
+    def bus_numbers(self) -> dict:
+        """Buses that are seen or remembered, with the route number when it was read (only buses are read for numbers)."""
+        s = self.s
+        if getattr(s, "reader", None) is None: return self.OCR_OFF
+        buses = [v for v in self._all() if v["name"] == "bus"]
+        return {"available": True, "buses": [{**self._slim(v), "number": v.get("text"), "times_read": v.get("text_reads", 0)} for v in buses],
+                "note": "a route number is a reading of a picture: say 'possibly' and suggest checking with the driver; it is reliable only when read 2 or more times"}
+
+    def set_crossing(self, on: bool) -> dict:
+        self.s.set_crossing(bool(on))
+        return {"crossing": bool(on), "seconds": self.s.CROSSING_S if on else 0, "note": "while crossing: no warnings about being on the road, but obstacles and vehicles ahead are still reported; it switches off by itself"}
+
     def hazards(self) -> dict:
         vs = [v for v in self._all() if v["status"] != "remembered"]
         danger = [v for v in vs if SEVERITY.get(v["name"]) == "danger"]; caution = [v for v in vs if SEVERITY.get(v["name"]) == "caution"]
@@ -238,6 +278,11 @@ TOOL_SCHEMAS = [
                                                        "category": {"type": "string"}, "limit": {"type": "integer"}}}},
     {"name": "where_to_go", "description": "Which way to go, from the free floor in front of the camera (sectors with how far the floor is free and what stops it: wall, person or vehicle, door, stairs, glass, road). Without a goal: the direction with the most free floor. With a goal (an object such as a door): whether the path to it is free. Approximate; always pass on its caveat.",
      "input_schema": {"type": "object", "properties": {"goal": {"type": "string"}}}},
+    {"name": "read_text", "description": "Read what is written in the current camera picture (signs, shop names, notices). Use for 'what is written', 'read this'.", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "list_texts", "description": "The list of everything read so far (signs, shop names, bus numbers), newest first, with where it was. Use for 'what signs were there', 'which shops'.", "input_schema": {"type": "object", "properties": {"limit": {"type": "integer"}}}},
+    {"name": "bus_numbers", "description": "Buses seen or remembered with their route number if it was read. Use for 'which bus is it', 'what number'.", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "set_crossing", "description": "The user says they are starting (on=true) or have finished (on=false) crossing a road. While crossing, the road counts as the way for 90 seconds and the 'you are on the road' warning is silent; obstacles and vehicles ahead are still reported.",
+     "input_schema": {"type": "object", "properties": {"on": {"type": "boolean"}}, "required": ["on"]}},
     {"name": "free_space", "description": "Raw free-space picture: five sectors left to right with the free distance and the blocker, what is underfoot (safe floor, road, rough ground), and whether the picture is reliable. Use for 'where is the wall', 'how wide is the passage'.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "ground_info", "description": "The surface under the feet in three zones (left, center, right): asphalt, gravel, grass, ice, pothole ... and its quality (good, fair, bad). Use for questions about the road, the surface, a bad road.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "hazards", "description": "Dangerous or cautionary things right now: dangerous objects (knife, weapon, fire, open manhole, predators ...), close vehicles and obstacles, bad surface ahead. Use for 'is it safe', 'what is dangerous'.", "input_schema": {"type": "object", "properties": {}}},
@@ -262,11 +307,18 @@ Rules:
 - Weapons, knives and other hazards are detected unreliably, in BOTH directions. Say 'возможно' for them. Never say that something is safe or that nothing dangerous is there; say only that the camera did not notice anything and that it must not be relied on.
 - Road and surface questions (road, asphalt, bad road, puddle, ice, pothole): use ground_info; surface type is a guess.
 - 'Which way to go', 'is the way free', 'where is the wall / the passage', 'take me to the door': use where_to_go or free_space and repeat only what they say, with their caveat. Distances there are rough and already reduced for safety. Never say the way is safe; if the level is 'unsure', say you cannot see the way reliably and the user must be careful.
+- Bus numbers and other text come from reading the picture and can be wrong: say 'возможно' unless read 2 or more times, and for a bus suggest checking the number with the driver.
+- On the road (not crossing) where_to_go points to the nearest sidewalk: pass that on. If the user says they are crossing or have crossed, call set_crossing.
 - Your answers may be read aloud: plain sentences only, no lists, no markdown, no emoji, no parentheses."""
 
 
 # --------------------------------------------------------------------------------------------------- agents
 GROUND_RE = re.compile(r"дорог|покрыт|асфальт|под ногами|тротуар|плитк|гравий|щебен|щебн|грунт|песок|песк|\bтрав|скольз|грязь|грязи|\bлуж|\bлёд|\bлед|снег|\bям[аыуо]|выбоин|ухаб|рельс|переход|зебр")
+READ_RE = re.compile(r"что (тут |там |здесь |на нём |на ней )?написано|прочитай|прочти|какая надпись|что на (вывеске|табличке|знаке)")
+TEXTS_RE = re.compile(r"какие надписи|список надписей|надписи вокруг|что было написано|какие вывески|какие магазины")
+BUSQ_RE = re.compile(r"номер автобуса|какой автобус|какой номер|номер маршрута|что за автобус")
+CROSS_ON_RE = re.compile(r"перехожу|начинаю переход|иду через дорогу|буду переходить|перейду дорогу")
+CROSS_OFF_RE = re.compile(r"перешёл|перешел|перешла|закончил переход|закончила переход|я на тротуаре")
 WAY_RE = re.compile(r"куда\s+(мне\s+)?(идти|пойти|повернуть|двигаться)|можно ли идти|свободен ли путь|свободно ли|где проход|есть ли проход|веди|как (мне )?(пройти|дойти|добраться|идти)")
 WALL_RE = re.compile(r"\bстен")
 GOAL_RE = re.compile(r"\bк\s|\bко\s|\bдо\s|веди|дойти|пройти|добраться")
@@ -318,10 +370,44 @@ class RuleAgent:
         parts = [f"{k} {dist_words(min(v))}" for k, v in groups.items() if v]
         return ("Стена: " + ", ".join(parts) + ". " + LiveTools.WAY_CAVEAT) if parts else "Стен рядом не вижу. Это только подсказка камеры."
 
+    OCR_OFF_RU = "Распознавание текста на сервере не включено: запустите сервер с ключом --ocr easyocr."
+
+    def _bus_phrase(self) -> str:
+        r = self.tools.bus_numbers()
+        if not r.get("available"): return self.OCR_OFF_RU
+        if not r["buses"]: return "Автобусов сейчас не вижу."
+        out = []
+        for b in r["buses"][:3]:
+            where = clock_ru(b["clock"], b["behind"]) + (", " + range_ru(b["range"]) if b["range"] != "?" else "") + (", сейчас вне кадра" if b["status"] == "remembered" else "")
+            if b["number"]: out.append(f"{'Автобус' if b['times_read'] >= 2 else 'Возможно, автобус'} {b['number']}, {where}")
+            else: out.append(f"Автобус {where}, номер пока не прочитал")
+        return ". ".join(out) + ". Номер лучше уточнить у водителя."
+
+    def _texts_phrase(self) -> str:
+        r = self.tools.list_texts(8)
+        if not r.get("available"): return self.OCR_OFF_RU
+        if not r["texts"]: return "Пока ничего не прочитано."
+        return "Прочитано: " + "; ".join(f"«{x['text']}»" + (f", {clock_ru(x['clock'], x['behind'])}" if "clock" in x else "") for x in r["texts"]) + "."
+
+    def _read_phrase(self) -> str:
+        r = self.tools.read_text()
+        if not r.get("available"): return self.OCR_OFF_RU
+        if not r["texts"]: return "Текста не вижу. Наведите камеру на надпись и спросите снова."
+        return "Написано: " + ", ".join(f"«{x['text']}»" for x in r["texts"]) + ". Возможны ошибки чтения."
+
     # ---- the answer
     def reply(self, text: str) -> tuple[str, list[str]]:
         t = (text or "").lower(); names = resolve_names(t); used: list[str] = []; cats = categories_in(t)
         dirs = [(w, c) for w, c in DIRECTIONS if re.search(r"\b" + w, t)]
+        if BUSQ_RE.search(t): used.append("bus_numbers"); return self._bus_phrase(), used
+        if TEXTS_RE.search(t): used.append("list_texts"); return self._texts_phrase(), used
+        if READ_RE.search(t): used.append("read_text"); return self._read_phrase(), used
+        if CROSS_OFF_RE.search(t):
+            used.append("set_crossing"); self.tools.set_crossing(False); return "Режим перехода выключен. Снова предупреждаю о проезжей части.", used
+        if CROSS_ON_RE.search(t):
+            used.append("set_crossing"); self.tools.set_crossing(True)
+            return ("Режим перехода на 90 секунд: не напоминаю, что вы на проезжей части, но предупреждаю о машинах и препятствиях впереди. "
+                    "Слушайте транспорт. Скажите «перешёл», когда будете на тротуаре."), used
         if HAZARD_RE.search(t) and not (set(names) - set(names_with_severity("danger"))):
             used += ["hazards"]; return self._hazard_phrase(), used
         if WAY_RE.search(t):

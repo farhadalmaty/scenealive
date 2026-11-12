@@ -50,8 +50,8 @@ def unpack_frame(data: bytes) -> tuple[dict, bytes]:
 
 
 class ServerApp:
-    def __init__(self, cfg: ServerConfig, detector, agent_client=None, log=None, ground_classifier=None, segmenter=None):
-        self.cfg, self.detector, self.agent_client, self.ground_classifier, self.segmenter = cfg, detector, agent_client, ground_classifier, segmenter
+    def __init__(self, cfg: ServerConfig, detector, agent_client=None, log=None, ground_classifier=None, segmenter=None, ocr_engine=None):
+        self.cfg, self.detector, self.agent_client, self.ground_classifier, self.segmenter, self.ocr_engine = cfg, detector, agent_client, ground_classifier, segmenter, ocr_engine
         self.log = log or (lambda *a: print(*a, file=sys.stderr, flush=True))
         self.sessions: dict[str, LiveSession] = {}; self.executor = ThreadPoolExecutor(max_workers=1); self.started = time.time()
         self.assets = {p: (open(os.path.join(WEB_DIR, f), "rb").read(), ct) for p, (f, ct) in ASSETS.items()}
@@ -88,7 +88,7 @@ class ServerApp:
             if path == "/favicon.ico": return await self._respond(w, 204)
             if path == "/api/health":
                 return await self._respond(w, 200, json.dumps({"ok": True, "version": __version__, "detector": getattr(self.detector, "name", "?"), "sessions": len(self.sessions),
-                                                               "max_sessions": self.cfg.max_sessions, "agent": self.cfg.agent}).encode(), "application/json")
+                                                               "max_sessions": self.cfg.max_sessions, "agent": self.cfg.agent, "device": self.cfg.device}).encode(), "application/json")
             if path == "/api/stats":
                 if not self._authorised(query): return await self._respond(w, 401, b"token required")
                 return await self._respond(w, 200, json.dumps({"uptime_s": round(time.time() - self.started), "sessions": [s.stats() for s in list(self.sessions.values())]}).encode(), "application/json")
@@ -150,13 +150,13 @@ class ServerApp:
                     if typ == "hello":
                         if session is not None: await send({"type": "error", "message": "hello was already sent"}); continue
                         if len(self.sessions) >= cfg.max_sessions: await send({"type": "error", "message": "the server is busy: too many live sessions"}); await ws.close(1013, "busy"); break
-                        session = LiveSession(self.detector, m, cfg, ground_classifier=self.ground_classifier, segmenter=self.segmenter, log=self.log); self.sessions[sid] = session; warning = None
+                        session = LiveSession(self.detector, m, cfg, ground_classifier=self.ground_classifier, segmenter=self.segmenter, log=self.log, ocr_engine=self.ocr_engine); self.sessions[sid] = session; warning = None
                         try: agent = make_agent(session, cfg, self.agent_client)
                         except Exception as ex: agent = RuleAgent(session); warning = f"Claude agent unavailable ({ex}); using the offline agent"
                         worker = asyncio.create_task(work())
                         await send({"type": "ready", "session": sid, "detector": getattr(self.detector, "name", "?"), "fov_long_deg": session.cam_cfg.fov_long_deg,
                                     "compass": session.compass.name, "agent": agent.kind, "agent_warning": warning, "map_interval_s": cfg.map_interval_s,
-                                    "names_ru": EN_RU, "severity": SEVERITY, "ground_enabled": self.ground_classifier is not None, "seg_enabled": self.segmenter is not None, "alerts_enabled": bool(cfg.alerts)})
+                                    "names_ru": EN_RU, "severity": SEVERITY, "ground_enabled": self.ground_classifier is not None, "seg_enabled": self.segmenter is not None, "ocr_enabled": self.ocr_engine is not None, "alerts_enabled": bool(cfg.alerts)})
                     elif session is None: await send({"type": "error", "message": "send hello first"})
                     elif typ == "chat":
                         t = asyncio.create_task(chat(m)); tasks.add(t); t.add_done_callback(tasks.discard)

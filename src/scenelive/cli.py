@@ -14,6 +14,7 @@ def server_config(args):
     from .server.config import ServerConfig
     cfg = ServerConfig.from_env(host=args.host, port=args.port, cert_dir=args.cert_dir, detector=args.detector, weights=args.weights, device=args.device, imgsz=args.imgsz,
                                 conf=args.conf, floor_conf=getattr(args, "floor_conf", 0.15), map_interval_s=args.map_interval, max_sessions=args.max_sessions, agent=args.agent, model=args.model, token=args.token)
+    cfg.ocr = getattr(args, "ocr", "none"); cfg.ocr_langs = getattr(args, "ocr_langs", "ru,en")
     cfg.seg = getattr(args, "seg", "none"); cfg.seg_size = getattr(args, "seg_size", 0); cfg.seg_every_s = getattr(args, "seg_every", 1.0); cfg.camera_height_m = getattr(args, "camera_height", 1.4)
     cfg.https = not args.no_https; cfg.vocab = getattr(args, "vocab", "extended"); cfg.ground = getattr(args, "ground", "none")
     cfg.alerts = not getattr(args, "no_alerts", False); cfg.alert_range_m = getattr(args, "alert_range", 6.0)
@@ -39,7 +40,7 @@ def _run_ok(run_dir: str) -> bool:
 
 def _common(p):
     p.add_argument("--detector", choices=["yolo", "world", "blobs"], default="world", help="yolo = COCO boxes (fast), world = open vocabulary (poles, walls, doors), blobs = demo, no model")
-    p.add_argument("--weights", default=None); p.add_argument("--device", default=None, help="cpu | cuda | mps")
+    p.add_argument("--weights", default=None); p.add_argument("--device", default="auto", help="auto (default): the graphics card if PyTorch sees one, otherwise the processor; or cpu, cuda, cuda:1")
     p.add_argument("--vocab", default="extended", help="words for the world detector: core (28), extended (the whole catalogue) or a text file")
     p.add_argument("--imgsz", type=int, default=640, help="detector input size (smaller = faster)"); p.add_argument("--conf", type=float, default=0.30, help="a track may START at this confidence")
     p.add_argument("--floor-conf", type=float, default=0.15, help="the detector reports down to this confidence; weaker detections only keep an existing track alive")
@@ -73,6 +74,9 @@ def _build(args, video):
     from .detect import make_detector
     fov = args.fov or (FOV_PRESETS[args.camera] if args.camera else 69.0)
     from .labels import load_vocab
+    if args.detector != "blobs":
+        from .device import describe, pick_device
+        args.device = pick_device(args.device); print(f"models run on: {describe(args.device)}", flush=True)
     det = make_detector(args.detector, args.device, args.imgsz, args.floor_conf, args.weights, load_vocab(args.vocab) if args.detector == "world" else None)
     pick = lambda **kw: {k: v for k, v in kw.items() if v is not None}                 # only the options the user actually gave
     fast = FastConfig(imgsz=args.imgsz, conf=args.floor_conf, start_conf=args.conf, **pick(min_conf_publish=args.min_conf_publish, publish_hits=args.publish_hits,
@@ -111,19 +115,21 @@ def main(argv=None):
     r.add_argument("video"); r.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=None); _common(r)
     b = sp.add_parser("bench", help="detector speed on this machine at several input sizes")
     b.add_argument("video"); b.add_argument("--detector", choices=["yolo", "world", "blobs"], default="world"); b.add_argument("--weights", default=None)
-    b.add_argument("--device", default=None); b.add_argument("--vocab", default="extended", help="core | extended | file: the speed depends on it, measure it"); b.add_argument("--imgsz", default="320,480,640", help="comma-separated sizes"); b.add_argument("--frames", type=int, default=20)
+    b.add_argument("--device", default="auto", help="auto (default): the graphics card if PyTorch sees one, otherwise the processor; or cpu, cuda, cuda:1"); b.add_argument("--vocab", default="extended", help="core | extended | file: the speed depends on it, measure it"); b.add_argument("--imgsz", default="320,480,640", help="comma-separated sizes"); b.add_argument("--frames", type=int, default=20)
     e = sp.add_parser("eval", help="score a run against your labels of the video and suggest the confidence threshold")
     e.add_argument("run_dir"); e.add_argument("labels"); e.add_argument("--tol", type=float, default=0.5, help="max seconds between a labeled moment and the nearest processed frame")
     sv = sp.add_parser("serve", help="web version: the page for the phone (camera, list, chat) and the server")
     sv.add_argument("--host", default="0.0.0.0", help="0.0.0.0 = reachable from the phone on the same Wi-Fi; 127.0.0.1 = this computer only")
     sv.add_argument("--port", type=int, default=8443); sv.add_argument("--no-https", action="store_true", help="plain http: the phone camera will NOT work (localhost only)")
     sv.add_argument("--cert-dir", default="certs"); sv.add_argument("--token", default=None, help="secret in the address (?token=...); generated automatically for LAN use")
-    sv.add_argument("--detector", choices=["yolo", "world", "blobs"], default="world"); sv.add_argument("--weights", default=None); sv.add_argument("--device", default=None)
+    sv.add_argument("--detector", choices=["yolo", "world", "blobs"], default="world"); sv.add_argument("--weights", default=None); sv.add_argument("--device", default="auto", help="auto (default): the graphics card if PyTorch sees one, otherwise the processor; or cpu, cuda, cuda:1")
     sv.add_argument("--imgsz", type=int, default=640); sv.add_argument("--conf", type=float, default=0.30, help="a track may START at this confidence"); sv.add_argument("--floor-conf", type=float, default=0.15, help="weaker detections only keep a track alive"); sv.add_argument("--map-interval", type=float, default=1.0)
     sv.add_argument("--vocab", default="extended", help="detector vocabulary: core (28 words), extended (everything in the catalogue: road, trash, weapons, animals ...) or a text file with one word per line")
     sv.add_argument("--ground", choices=["none", "clip", "colors"], default="none", help="surface under the feet (road, asphalt, bad road); clip needs the CLIP package that YOLO-World installs")
     sv.add_argument("--seg", choices=["none", "segformer", "colors"], default="none", help="floor / walls / road segmentation for 'where to go' (segformer needs transformers: windows\\setup_seg.bat)")
     sv.add_argument("--seg-size", type=int, default=0, help="segmentation input, long side in pixels (448 is faster; 0 = model default)"); sv.add_argument("--seg-every", type=float, default=1.0, help="seconds between segmentations")
+    sv.add_argument("--ocr", choices=["none", "easyocr"], default="none", help="read bus numbers (only on detected buses), signs and 'what is written' (needs easyocr: windows\\setup_ocr.bat)")
+    sv.add_argument("--ocr-langs", default="ru,en", help="languages for reading text, comma separated")
     sv.add_argument("--camera-height", type=float, default=1.4, help="metres: height of the phone above the floor (distances to obstacles scale with it)")
     sv.add_argument("--no-alerts", action="store_true", help="switch off the spoken/visual warnings"); sv.add_argument("--alert-range", type=float, default=6.0, help="metres: close vehicles ahead are announced within this range")
     sv.add_argument("--max-sessions", type=int, default=2); sv.add_argument("--agent", choices=["auto", "claude", "offline"], default="auto", help="auto: Claude when ANTHROPIC_API_KEY is set")
@@ -136,7 +142,11 @@ def main(argv=None):
     cs.add_argument("--fast", action="store_true", help="do not wait in real time"); cs.add_argument("--max-seconds", type=float, default=None); cs.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=None)
     bs = sp.add_parser("bench-seg", help="measure a segmentation model (floor, walls, doors, stairs, glass) on your video and save overlay pictures to LOOK at")
     bs.add_argument("video"); bs.add_argument("--model", choices=["segformer", "colors"], default="segformer", help="segformer = SegFormer-B0 (needs transformers); colors = a crude demo")
-    bs.add_argument("--device", default=None); bs.add_argument("--size", type=int, default=0, help="model input: long side in pixels, aspect kept (e.g. 448 is faster); 0 = the model default 512x512, measured at 343 ms"); bs.add_argument("--frames", type=int, default=12); bs.add_argument("--long-side", type=int, default=640); bs.add_argument("-o", "--out", default=None)
+    bs.add_argument("--device", default="auto", help="auto (default): the graphics card if PyTorch sees one, otherwise the processor; or cpu, cuda, cuda:1"); bs.add_argument("--size", type=int, default=0, help="model input: long side in pixels, aspect kept (e.g. 448 is faster); 0 = the model default 512x512, measured at 343 ms"); bs.add_argument("--raw", action="store_true", help="show the model output without the clean-up (painted lines, small patches)"); bs.add_argument("--frames", type=int, default=12); bs.add_argument("--long-side", type=int, default=640); bs.add_argument("-o", "--out", default=None)
+    bo = sp.add_parser("bench-ocr", help="measure text reading on photos, a folder of photos or a video: time per picture and what was read")
+    bo.add_argument("source", help="an image, a folder of images or a video"); bo.add_argument("--langs", default="ru,en"); bo.add_argument("--frames", type=int, default=12)
+    bo.add_argument("--bus", action="store_true", help="read as bus numbers (digits and a few letters only)"); bo.add_argument("-o", "--out", default=None)
+    sp.add_parser("device", help="where would the models run: PyTorch build, CUDA, graphics card")
     vc = sp.add_parser("vocab", help="show the catalogue of everything that can be named; write a vocabulary file to edit (--out)")
     vc.add_argument("--out", default=None, help="write the extended vocabulary to this text file (one word per line, grouped by category) and use it with --vocab file")
     vc.add_argument("--category", default=None, help="only this category (people, vehicle, animal, structure, indoor, nature, furniture, obstacle, hazard, weapon, trash, surface)")
@@ -154,11 +164,22 @@ def main(argv=None):
         out = args.out or os.path.join("runs", "seg_" + _stamp())
         try:
             seg = make_segmenter(args.model, args.device, args.size); print(f"model: {seg.name}; the first start downloads it", flush=True)
-            bench_segmenter(args.video, seg, out, args.frames, args.long_side)
+            bench_segmenter(args.video, seg, out, args.frames, args.long_side, clean=not args.raw)
         except ImportError as ex: print(f"Cannot run: {ex}"); return 2
         except (FileNotFoundError, ValueError) as ex: print(f"Cannot run: {ex}"); return 2
         print(f"overlay pictures (green = sidewalk or floor, brown = ROAD, light green = grass or earth, blue = wall, orange = door, yellow = stairs, cyan = glass, red = moving, magenta = obstacle) are in {out}")
         return 0
+    if args.cmd == "bench-ocr":
+        from .ocr import bench_ocr, make_ocr
+        out = args.out or os.path.join("runs", "ocr_" + _stamp())
+        try:
+            eng = make_ocr("easyocr", args.langs, "auto"); print("engine: easyocr (the first start downloads its models)", flush=True)
+            bench_ocr(args.source, eng, out, args.frames, bus=args.bus)
+        except (ImportError, FileNotFoundError, ValueError) as ex: print(f"Cannot run: {ex}"); return 2
+        print(f"pictures with numbered boxes and results.txt are in {out}"); return 0
+    if args.cmd == "device":
+        from .device import main as device_main
+        return device_main()
     if args.cmd == "vocab":
         from .catalog import CATEGORY, CATEGORY_RU, ENTRIES, RU_NAME, SEVERITY
         from .labels import EXTENDED_VOCAB
@@ -182,12 +203,17 @@ def main(argv=None):
             from .server.runner import make_ssl_context, run_server
             from .ground import make_ground
             from .labels import load_vocab
+            from .device import describe, pick_device
+            dev = pick_device(cfg.device); cfg.device = dev
+            print(f"models run on: {describe(dev)}", flush=True)
             vocab = load_vocab(cfg.vocab)
             print(f"loading the detector '{cfg.detector}', vocabulary '{cfg.vocab}' ({len(vocab)} words) (the first start downloads the weights: it can take a few minutes) ...", flush=True)
             det = make_detector(cfg.detector, cfg.device, cfg.imgsz, cfg.floor_conf, cfg.weights, vocab)
             gr = make_ground(cfg.ground, cfg.device)
             from .segment import make_segmenter
             sg = make_segmenter(cfg.seg, cfg.device, cfg.seg_size) if cfg.seg != "none" else None
+            from .ocr import make_ocr
+            oc = make_ocr(cfg.ocr, cfg.ocr_langs, cfg.device)
             try: det.detect(np.zeros((360, 640, 3), np.uint8))                      # warm-up: the first real frame must not pay for it
             except Exception: pass
             if cfg.https: make_ssl_context(cfg)                                    # fail early and clearly if https cannot be set up
@@ -195,8 +221,8 @@ def main(argv=None):
             print(f"Cannot start: {ex}"); return 2
         except ImportError as ex:
             print(f"A package is missing: {ex}\nInstall:  windows\\setup_server.bat   (cryptography for https) and  windows\\setup_models.bat  (ultralytics for the detector)"); return 2
-        print(f"agent: {agent_status(cfg)}", flush=True); print(f"surface recognition: {cfg.ground}   free space / where to go: {cfg.seg}   warnings: {'on' if cfg.alerts else 'off'}", flush=True)
-        run_server(cfg, det, gr, sg); return 0
+        print(f"agent: {agent_status(cfg)}", flush=True); print(f"surface recognition: {cfg.ground}   free space / where to go: {cfg.seg}   text reading: {cfg.ocr}   warnings: {'on' if cfg.alerts else 'off'}", flush=True)
+        run_server(cfg, det, gr, sg, oc); return 0
     if args.cmd == "client-sim":
         import asyncio
         from .server.client_sim import format_summary, run_client

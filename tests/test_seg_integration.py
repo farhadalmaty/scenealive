@@ -105,10 +105,29 @@ class TestAlertsFromTheFloor(unittest.TestCase):
         a = self.alerts(GeoSegmenter(fill="wall")); self.assertEqual(len(a), 1); self.assertEqual(a[0]["level"], "danger"); self.assertTrue(a[0]["text"].startswith("Под ногами") or "Стоп" in a[0]["text"]); self.assertIn("Стоп", a[0]["text"])
 
     def test_standing_on_the_road_is_announced(self):
-        a = self.alerts(GeoSegmenter(fill="road")); self.assertEqual([x["text"] for x in a], ["Внимание! Похоже, вы на проезжей части."])
+        a = self.alerts(GeoSegmenter(fill="road")); self.assertEqual(len(a), 1); self.assertTrue(a[0]["text"].startswith("Внимание! Похоже, вы на проезжей части"), a[0]["text"])
 
     def test_a_free_floor_and_an_unsure_picture_stay_quiet(self):
         self.assertEqual(self.alerts(GeoSegmenter(wall_forward=6.0)), []); self.assertEqual(self.alerts(GeoSegmenter(fill="wall"), pitch=None), [])        # no tilt: no warnings from geometry
+
+
+class TestCrossing(unittest.TestCase):
+    def test_crossing_by_voice_silences_the_road_warning_but_not_the_obstacles(self):
+        seg = GeoSegmenter(fill="road"); s, _ = session(seg, frames=2); a = RuleAgent(s)
+        txt, used = a.reply("я перехожу дорогу"); self.assertEqual(used, ["set_crossing"]); self.assertIn("Режим перехода на 90 секунд", txt); self.assertTrue(s.crossing())
+        out = [s.process(H.jpeg_at(k / 3)[0], {"seq": k, "t": k / 3, "pitch": 15.0}) for k in range(2, 14)]
+        self.assertFalse(any(x["name"] == "road" for r in out for x in r["alerts"])); self.assertTrue(out[-1]["free_space"]["crossing"])
+        self.assertTrue(out[-1]["free_space"]["advice"]["text"].startswith("Режим перехода."))
+        txt, _ = a.reply("перешёл"); self.assertIn("выключен", txt); self.assertFalse(s.crossing())
+
+    def test_crossing_switches_itself_off(self):
+        s, _ = session(GeoSegmenter(fill="road"), frames=1); s.set_crossing(True, seconds=1.0); self.assertTrue(s.crossing())
+        for k in range(1, 6): s.process(H.jpeg_at(k / 3)[0], {"seq": k, "t": k / 3, "pitch": 15.0})
+        self.assertFalse(s.crossing())
+
+    def test_the_model_can_switch_it(self):
+        s, _ = session(GeoSegmenter(fill="road"), frames=1); r = LiveTools(s).set_crossing(True); self.assertTrue(r["crossing"]); self.assertTrue(s.crossing())
+        self.assertIn("set_crossing", {x["name"] for x in TOOL_SCHEMAS})
 
 
 class TestAssistant(unittest.TestCase):
@@ -123,7 +142,7 @@ class TestAssistant(unittest.TestCase):
     def test_take_me_to_the_door(self):
         s, _ = session(GeoSegmenter(wall_forward=9.0), detector=Door()); txt, used = RuleAgent(s).reply("веди к двери"); self.assertEqual(used, ["where_to_go"]); self.assertTrue(txt.startswith("Дверь"), txt)
         self.assertIn("свободным", txt); self.assertIn("Камера может не заметить", txt)
-        blocked, _ = session(GeoSegmenter(wall_forward=3.0, blocker="person"), detector=Door()); self.assertIn("На пути к дверь человек или транспорт", RuleAgent(blocked).reply("как пройти к двери")[0])
+        blocked, _ = session(GeoSegmenter(wall_forward=3.0, blocker="person"), detector=Door()); self.assertIn("Дверь: путь перекрыт, впереди препятствие, возможно человек или машина", RuleAgent(blocked).reply("как пройти к двери")[0])
 
     def test_it_does_not_pretend_when_it_cannot_see(self):
         s, _ = session(GeoSegmenter(wall_forward=4.0), pitch=None); txt, _ = RuleAgent(s).reply("можно ли идти?"); self.assertIn("Остановитесь и не полагайтесь", txt); self.assertNotIn("Камера может не заметить", txt)

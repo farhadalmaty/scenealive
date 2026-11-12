@@ -87,6 +87,15 @@ class TestPureHelpers(unittest.TestCase):
         js = open(APP_JS, encoding="utf-8").read(); html = open(os.path.join(os.path.dirname(APP_JS), "index.html"), encoding="utf-8").read()
         self.assertIn("pitch: pitch", js); self.assertIn("renderWay(m.free_space)", js); self.assertIn('id="way"', html); self.assertIn('data-q="Куда идти?"', html)
 
+    def test_the_assistant_buttons_are_at_the_top(self):
+        html = open(os.path.join(os.path.dirname(APP_JS), "index.html"), encoding="utf-8").read()
+        order = [html.index(x) for x in ('id="start"', 'id="mic"', 'id="way"', 'class="quick"', 'id="chat-text"', 'id="video"', 'id="radar"')]
+        self.assertEqual(order, sorted(order))                                                 # start, speak, the way, quick questions, chat ... then the camera and the radar
+        self.assertIn('data-q="Что написано?"', html); self.assertIn('data-q="Какой номер автобуса?"', html)
+
+    def test_a_read_number_is_shown_next_to_the_object(self):
+        js = open(APP_JS, encoding="utf-8").read(); self.assertIn("v.text_reads", js); self.assertIn("' «' + v.text + '»'", js)
+
     def test_texts(self):
         out = node("const S=require(process.argv[1]); console.log(JSON.stringify([S.rangeText('~5 m'),S.rangeText('10-15 m'),S.rangeText('15+ m'),S.rangeText('?'),S.clockText(3,false),S.clockText(12,false),S.nameRu('person'),S.nameRu('zebra')]))")
         self.assertEqual(out, ["около 5 м", "10–15 м", "дальше 15 м", "расстояние неизвестно", "справа (3 ч)", "прямо по курсу (12 ч)", "человек", "zebra"])

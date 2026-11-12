@@ -20,7 +20,8 @@ class YoloDetector:
                  device: str | None = None, classes=COCO_STREET, half: bool = False):
         from ultralytics import YOLO
         self.m, self.imgsz, self.conf, self.iou, self.half = YOLO(weights), imgsz, conf, iou, half
-        self.device = device or "cpu"; self.allowed = set(classes) if classes else None
+        from ..device import configure, pick_device, ultralytics_device
+        dev = pick_device(device); configure(dev); self.device = ultralytics_device(dev); self.torch_device = dev; self.allowed = set(classes) if classes else None
         self.name = f"yolo:{weights}@{imgsz}"
 
     def detect(self, frame_bgr: np.ndarray) -> list[Detection]:
@@ -35,7 +36,9 @@ class YoloWorldDetector:
                  device: str | None = None, half: bool = False):
         from ultralytics import YOLOWorld
         self.m = YOLOWorld(weights); self.vocab = list(vocab or STREET_VOCAB); self.m.set_classes(self.vocab)
-        self.imgsz, self.conf, self.iou, self.half, self.device = imgsz, conf, iou, half, device or "cpu"
+        from ..device import configure, pick_device, ultralytics_device
+        dev = pick_device(device); configure(dev)
+        self.imgsz, self.conf, self.iou, self.half, self.device, self.torch_device = imgsz, conf, iou, half, ultralytics_device(dev), dev
         self.name = f"yolo-world:{weights}@{imgsz}"
 
     def detect(self, frame_bgr: np.ndarray) -> list[Detection]:

@@ -15,13 +15,39 @@
 </header>
 <div id="alert" class="alert hidden" role="alert" aria-live="assertive"></div>
 <main>
+  <section id="assistant-panel" class="assistant" aria-label="Помощник">
+    <div class="top-buttons">
+      <button id="start" class="primary big" type="button">Начать</button>
+      <button id="mic" class="big" type="button" title="Нажмите и скажите вопрос">Говорить</button>
+    </div>
+    <div id="way" class="way hidden" aria-live="polite"></div>
+    <div class="quick">
+      <button type="button" data-q="Куда идти?">Куда идти?</button>
+      <button type="button" data-q="Что вокруг?">Что вокруг?</button>
+      <button type="button" data-q="Что опасного?">Что опасного?</button>
+      <button type="button" data-q="Что впереди?">Что впереди?</button>
+      <button type="button" data-q="Что написано?">Что написано?</button>
+      <button type="button" data-q="Какие надписи вокруг?">Какие надписи?</button>
+      <button type="button" data-q="Какой номер автобуса?">Номер автобуса?</button>
+      <button type="button" data-q="Где стена?">Где стена?</button>
+      <button type="button" data-q="Что слева?">Что слева?</button>
+      <button type="button" data-q="Что справа?">Что справа?</button>
+      <button type="button" data-q="Какая дорога?">Какая дорога?</button>
+    </div>
+    <div class="chat-input">
+      <input id="chat-text" type="text" placeholder="Спросите о том, что вокруг" autocomplete="off" enterkeyhint="send">
+      <button id="chat-send" type="button" class="primary">Спросить</button>
+    </div>
+    <div id="messages" class="messages" aria-live="polite"></div>
+  </section>
+
   <section id="camera-panel">
     <div id="video-wrap" class="video-wrap">
       <video id="video" playsinline muted autoplay></video>
       <canvas id="overlay"></canvas>
     </div>
+    <div id="ground" class="ground"></div>
     <div class="controls">
-      <button id="start" class="primary" type="button">Начать</button>
       <label>Камера
         <select id="camera">
           <option value="ultrawide">Сверхширокая 0,5× (по возможности)</option>
@@ -38,36 +64,14 @@
       <label class="check"><input id="boxes" type="checkbox" checked> рамки на видео</label>
       <label class="check"><input id="voice" type="checkbox" checked> озвучивать ответы и предупреждения</label>
     </div>
-    <div id="ground" class="ground"></div>
     <div id="notes" class="notes"></div>
   </section>
 
   <section id="list-panel">
     <h2>Вижу</h2>
-    <div id="way" class="way hidden" aria-live="polite"></div>
     <div id="radar" class="radar"></div>
     <ul id="list" class="list"></ul>
     <button id="reset" type="button" class="secondary">Новый маршрут (очистить список)</button>
-  </section>
-
-  <section id="chat-panel">
-    <h2>Помощник</h2>
-    <div id="messages" class="messages"></div>
-    <div class="quick">
-      <button type="button" data-q="Куда идти?">Куда идти?</button>
-      <button type="button" data-q="Что вокруг?">Что вокруг?</button>
-      <button type="button" data-q="Что ближайшее?">Что ближайшее?</button>
-      <button type="button" data-q="Что впереди?">Что впереди?</button>
-      <button type="button" data-q="Что слева?">Что слева?</button>
-      <button type="button" data-q="Что справа?">Что справа?</button>
-      <button type="button" data-q="Какая дорога?">Какая дорога?</button>
-      <button type="button" data-q="Что опасного?">Что опасного?</button>
-    </div>
-    <div class="chat-input">
-      <input id="chat-text" type="text" placeholder="Спросите о том, что вокруг" autocomplete="off" enterkeyhint="send">
-      <button id="mic" type="button" title="Нажмите и скажите вопрос">Говорить</button>
-      <button id="chat-send" type="button" class="primary">Спросить</button>
-    </div>
   </section>
 </main>
 <script src="/app.js"></script>

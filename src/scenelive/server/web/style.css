@@ -6,7 +6,7 @@ h1 { font-size:18px; margin:0; } h2 { font-size:16px; margin:0 0 8px; color:var(
 .dot { width:10px; height:10px; border-radius:50%; background:var(--muted); } .dot.on { background:var(--ok); } .dot.err { background:var(--bad); }
 #status { font-size:13px; color:var(--muted); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 main { display:grid; gap:14px; padding:14px; max-width:1100px; margin:0 auto; padding-bottom:calc(14px + env(safe-area-inset-bottom)); }
-@media (min-width: 900px) { main { grid-template-columns: 1fr 1fr; } #chat-panel { grid-column: 1 / -1; } }
+@media (min-width: 900px) { main { grid-template-columns: 1fr 1fr; } #assistant-panel { grid-column: 1 / -1; } }
 section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; }
 .video-wrap { position:relative; width:100%; max-height:60vh; background:#000; border-radius:8px; overflow:hidden; aspect-ratio:16/9; margin:0 auto; }
 video, canvas#overlay { position:absolute; inset:0; width:100%; height:100%; display:block; }
@@ -38,7 +38,11 @@ button.secondary { margin-top:10px; width:100%; font-size:13px; color:var(--mute
 .gchip { background:#10161c; border:1px solid var(--line); border-radius:8px; padding:6px 8px; font-size:12px; color:var(--muted); } .gchip b { display:block; color:var(--text); font-size:13px; }
 .gchip.good { border-color:var(--ok); } .gchip.fair { border-color:var(--warn); } .gchip.bad { border-color:var(--bad); background:#2a1414; }
 .item.danger { border-left-color:var(--bad); background:#2a1414; } .item.danger .name { color:#ffd7d7; }
-.chat-input { grid-template-columns:1fr auto auto; } button.listening { background:var(--bad); border-color:var(--bad); color:#210606; font-weight:700; }
+.chat-input { grid-template-columns:1fr auto; } button.listening { background:var(--bad); border-color:var(--bad); color:#210606; font-weight:700; }
 
 .way { margin:0 0 10px; padding:9px 12px; border-radius:10px; border:1px solid var(--line); border-left-width:5px; font-weight:600; }
 .way.level-ok { border-left-color:var(--ok); } .way.level-caution { border-left-color:var(--warn); background:#2a2412; } .way.level-stop { border-left-color:var(--bad); background:#2a1414; color:#ffd7d7; } .way.level-unsure { border-left-color:var(--muted); color:var(--muted); }
+
+.top-buttons { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
+button.big { font-size:20px; padding:16px 12px; font-weight:700; min-height:60px; }
+.assistant .messages { margin:10px 0 0; }

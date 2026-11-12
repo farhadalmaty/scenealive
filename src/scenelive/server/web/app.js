@@ -246,7 +246,7 @@
     if (!entries.length) { var e = document.createElement('li'); e.className = 'empty'; e.textContent = S.running ? 'Пока ничего не найдено.' : 'Нажмите «Начать».'; ul.appendChild(e); return; }
     entries.forEach(function (v) {
       var li = document.createElement('li'); li.className = 'item ' + v.status + (S.severity[v.name] === 'danger' ? ' danger' : '');
-      var a = document.createElement('span'); a.className = 'name'; a.textContent = nameRu(v.name) + (v.moving ? ' ↔' : '');
+      var a = document.createElement('span'); a.className = 'name'; a.textContent = nameRu(v.name) + (v.text ? ' «' + v.text + '»' + ((v.text_reads || 0) < 2 ? '?' : '') : '') + (v.moving ? ' ↔' : '');   // a bus number read once is shown with '?'
       var b = document.createElement('span'); b.className = 'where'; b.textContent = clockText(v.clock, v.behind) + ' · ' + rangeText(v.range);
       var c = document.createElement('span'); c.className = 'meta';
       c.textContent = STATUS_RU[v.status] + ' · уверенность ' + Math.round(v.conf * 100) + ' %' + (v.status === 'remembered' ? ' · ' + Math.round(v.age_s) + ' с назад' : '');
